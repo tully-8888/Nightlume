@@ -71,9 +71,9 @@ fi
 
 echo Creating DMG
 if [ "$SIGNING_IDENTITY" != "" ]; then
-  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --identity="$SIGNING_IDENTITY" --no-version-in-filename || fail "create-dmg failed!"
+  create-dmg --identity="$SIGNING_IDENTITY" --no-version-in-filename $INSTALLER_FOLDER/Moonlight.dmg $BUILD_FOLDER/app/Moonlight.app || fail "create-dmg failed!"
 else
-  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --no-version-in-filename
+  create-dmg --no-version-in-filename $INSTALLER_FOLDER/Moonlight.dmg $BUILD_FOLDER/app/Moonlight.app
   case $? in
     0) ;;
     2) ;;
