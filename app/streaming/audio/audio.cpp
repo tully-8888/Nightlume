@@ -174,7 +174,7 @@ void Session::arDecodeAndPlaySample(char* sampleData, int sampleLength)
     // so we will skip it on that platform.
     if (s_ActiveSession->m_AudioSampleCount == 0) {
 #ifdef Q_OS_DARWIN
-        MoonlightSetCurrentThreadQoS_UserInitiated();
+        MoonlightSetCurrentThreadQoS_UserInteractive();
 #endif
         if (SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH) < 0) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,

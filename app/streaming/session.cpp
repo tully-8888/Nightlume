@@ -2171,6 +2171,19 @@ void Session::exec()
                     m_AudioMuted = false;
                 }
                 m_InputHandler->notifyFocusGained();
+#ifdef Q_OS_DARWIN
+                if (m_Window != nullptr) {
+                    // Ensure Dock/Cmd+Tab activation reliably brings the stream window
+                    // to the foreground on macOS.
+                    SDL_RaiseWindow(m_Window);
+
+                    // If the session is configured for fullscreen, re-assert fullscreen
+                    // on focus gain to recover from macOS Spaces/activation edge cases.
+                    if (m_IsFullScreen && !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag)) {
+                        SDL_SetWindowFullscreen(m_Window, m_FullScreenFlag);
+                    }
+                }
+#endif
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();

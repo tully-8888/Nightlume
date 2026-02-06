@@ -2039,6 +2039,40 @@ Flickable {
                 }
 
                 CheckBox {
+                    id: useDisplayLinkCheck
+                    width: parent.width
+                    visible: Qt.platform.os === "osx"
+                    text: qsTr("Use DisplayLink for frame pacing (macOS)")
+                    font.pointSize: 12
+                    checked: StreamingPreferences.useDisplayLink
+                    onCheckedChanged: {
+                        StreamingPreferences.useDisplayLink = checked
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Uses CVDisplayLink for precise frame timing instead of a timer-based approach. Can improve smoothness but may cause issues on some displays.")
+                }
+
+                CheckBox {
+                    id: tripleBufferingCheck
+                    width: parent.width
+                    visible: Qt.platform.os === "osx"
+                    text: qsTr("Enable triple buffering (macOS)")
+                    font.pointSize: 12
+                    checked: StreamingPreferences.tripleBuffering
+                    onCheckedChanged: {
+                        StreamingPreferences.tripleBuffering = checked
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Uses 3 frame buffers instead of 1 for video decoding. Reduces stuttering on networks with jitter but adds ~1 frame of latency.")
+                }
+
+                CheckBox {
                     id: enableMdns
                     width: parent.width
                     text: qsTr("Automatically find PCs on the local network (Recommended)")
