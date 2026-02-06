@@ -128,4 +128,8 @@ QUrl BoxArtManager::loadBoxArtFromNetwork(NvComputer* computer, int appId)
     return QUrl();
 }
 
-#include "boxartmanager.moc"
+#ifdef QT_DEBUG
+#include <debug/boxartmanager.moc>
+#else
+#include <release/boxartmanager.moc>
+#endif

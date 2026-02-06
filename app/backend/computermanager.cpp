@@ -1006,4 +1006,8 @@ QString ComputerManager::generatePinString()
     return QString::asprintf("%04u", QRandomGenerator::system()->bounded(10000));
 }
 
-#include "computermanager.moc"
+#ifdef QT_DEBUG
+#include <debug/computermanager.moc>
+#else
+#include <release/computermanager.moc>
+#endif

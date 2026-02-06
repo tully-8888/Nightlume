@@ -242,4 +242,8 @@ void ComputerModel::handleComputerStateChanged(NvComputer* computer)
     }
 }
 
-#include "computermodel.moc"
+#ifdef QT_DEBUG
+#include <debug/computermodel.moc>
+#else
+#include <release/computermodel.moc>
+#endif
