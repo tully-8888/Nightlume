@@ -15,6 +15,7 @@ BUILD_ROOT=$PWD/build
 SOURCE_ROOT=$PWD
 BUILD_FOLDER=$BUILD_ROOT/build-$BUILD_CONFIG
 INSTALLER_FOLDER=$BUILD_ROOT/installer-$BUILD_CONFIG
+APPLE_ARCHS=${QMAKE_APPLE_DEVICE_ARCHS:-"x86_64 arm64"}
 
 if [ -n "$CI_VERSION" ]; then
   VERSION=$CI_VERSION
@@ -40,7 +41,7 @@ mkdir $INSTALLER_FOLDER
 
 echo Configuring the project
 pushd $BUILD_FOLDER
-qmake6 $SOURCE_ROOT/moonlight-qt.pro CONFIG+=release QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64" || fail "Qmake failed!"
+qmake6 $SOURCE_ROOT/moonlight-qt.pro CONFIG+=release QMAKE_APPLE_DEVICE_ARCHS="$APPLE_ARCHS" || fail "Qmake failed!"
 popd
 
 echo Compiling Moonlight in $BUILD_CONFIG configuration
