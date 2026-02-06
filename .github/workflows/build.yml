@@ -7,39 +7,55 @@ on:
   push:
   pull_request:
     branches:
-      - master
+      - main
 
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  setup:
-    runs-on: ubuntu-latest
-    outputs:
-      ci_version: ${{ steps.set-ci-version.outputs.ci_version }}
+  build-macos:
+    runs-on: macos-15
+    env:
+      QT_VERSION: "6.8.2"
+
     steps:
-      - name: Set CI version
-        id: set-ci-version
-        shell: bash
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 1
+
+      - name: Install Dependencies
         run: |
-          CI_VERSION=`echo ${GITHUB_SHA} | cut -c1-6`
-          echo "ci_version=${CI_VERSION}" >> "${GITHUB_OUTPUT}"
+          brew install create-dmg
 
-  build-appimage:
-    needs: setup
-    uses: ./.github/workflows/build-appimage.yml
-    with:
-      ci_version: ${{ needs.setup.outputs.ci_version }}
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          cache: true
+          version: ${{ env.QT_VERSION }}
 
-  build-steamlink:
-    needs: setup
-    uses: ./.github/workflows/build-steamlink.yml
-    with:
-      ci_version: ${{ needs.setup.outputs.ci_version }}
+      - name: Build
+        run: |
+          qmake6 moonlight-qt.pro
+          make -j$(sysctl -n hw.ncpu) release
 
-  build-windows-macos:
-    needs: setup
-    uses: ./.github/workflows/build-win-mac.yml
-    with:
-      ci_version: ${{ needs.setup.outputs.ci_version }}
+      - name: Create DMG
+        run: |
+          scripts/generate-dmg.sh Release
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nightlume-macOS-${{ github.sha }}
+          path: build/installer-Release/*.dmg
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload Debug Symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nightlume-macOS-dSYM-${{ github.sha }}
+          path: build/installer-Release/*.dSYM
+          if-no-files-found: warn
