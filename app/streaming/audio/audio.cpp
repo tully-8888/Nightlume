@@ -1,10 +1,6 @@
 #include "../session.h"
 #include "renderers/renderer.h"
 
-#ifdef HAVE_SLAUDIO
-#include "renderers/slaud.h"
-#endif
-
 #ifdef Q_OS_DARWIN
 #include "renderers/coreaudio.h"
 #include "../macos/macos_performance.h"
@@ -36,12 +32,6 @@ IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATI
         return nullptr;
     }
 #endif
-#if defined(HAVE_SLAUDIO)
-    else if (mlAudio == "slaudio") {
-        TRY_INIT_RENDERER(SLAudioRenderer, opusConfig)
-        return nullptr;
-    }
-#endif
     else if (!mlAudio.isEmpty()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "Unknown audio backend: %s",
@@ -50,11 +40,6 @@ IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATI
     }
 
     // -------------- Automatic backend selection below this line ---------------
-
-#if defined(HAVE_SLAUDIO)
-    // Steam Link should always have SLAudio
-    TRY_INIT_RENDERER(SLAudioRenderer, opusConfig)
-#endif
 
 #if defined(Q_OS_DARWIN)
     // On macOS, prefer CoreAudio for low latency (with SDL fallback)
@@ -118,11 +103,6 @@ int Session::getAudioRendererCapabilities(int audioConfiguration)
     // All audio renderers support arbitrary audio duration
     caps |= CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION;
 
-#ifdef STEAM_LINK
-    // Steam Link devices have slow Opus decoders
-    caps |= CAPABILITY_SLOW_OPUS_DECODER;
-#endif
-
     return caps;
 }
 
@@ -167,11 +147,8 @@ void Session::arDecodeAndPlaySample(char* sampleData, int sampleLength)
 {
     int samplesDecoded;
 
-#ifndef STEAM_LINK
     // Set this thread to high priority to reduce the chance of missing
-    // our sample delivery time. On Steam Link, this causes starvation
-    // of other threads due to severely restricted CPU time available,
-    // so we will skip it on that platform.
+    // our sample delivery time.
     if (s_ActiveSession->m_AudioSampleCount == 0) {
 #ifdef Q_OS_DARWIN
         MoonlightSetCurrentThreadQoS_UserInteractive();
@@ -182,7 +159,6 @@ void Session::arDecodeAndPlaySample(char* sampleData, int sampleLength)
                         SDL_GetError());
         }
     }
-#endif
 
     // See if we need to drop this sample
     if (s_ActiveSession->m_DropAudioEndTime != 0) {

@@ -215,7 +215,7 @@ bool CoreAudioRenderer::submitAudio(int bytesWritten)
     if (samplesToWrite > free) {
         size_t dropSamples = samplesToWrite - free;
         s_AudioOverrunStats.count++;
-        ml_stat_add(&s_AudioOverrunStats, (double)(dropSamples / m_ChannelCount));
+        ml_stat_add(&s_AudioOverrunStats, (double)dropSamples / m_ChannelCount);
         if (ml_stat_should_log(&s_AudioOverrunStats, 5000)) {
             ML_LOG_AUDIO_WARN("Audio overrun: dropped=%zu samples, total_overruns=%llu",
                              dropSamples, s_AudioOverrunStats.count);

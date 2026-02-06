@@ -11,10 +11,6 @@
 #include "video/ffmpeg.h"
 #endif
 
-#ifdef HAVE_SLVIDEO
-#include "video/slvid.h"
-#endif
-
 #ifdef Q_OS_WIN32
 // Scaling the icon down on Win32 looks dreadful, so render at lower res
 #define ICON_SIZE 32
@@ -324,21 +320,6 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                 "V-sync %s",
                 enableVsync ? "enabled" : "disabled");
 
-#ifdef HAVE_SLVIDEO
-    chosenDecoder = new SLVideoDecoder(testOnly);
-    if (chosenDecoder->initialize(&params)) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "SLVideo video decoder chosen");
-        return true;
-    }
-    else {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Unable to load SLVideo decoder");
-        delete chosenDecoder;
-        chosenDecoder = nullptr;
-    }
-#endif
-
 #ifdef HAVE_FFMPEG
     chosenDecoder = new FFmpegVideoDecoder(testOnly);
     if (chosenDecoder->initialize(&params)) {
@@ -354,7 +335,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     }
 #endif
 
-#if !defined(HAVE_FFMPEG) && !defined(HAVE_SLVIDEO)
+#ifndef HAVE_FFMPEG
 #error No video decoding libraries available!
 #endif
 
@@ -695,7 +676,6 @@ bool Session::initialize(QQuickWindow* qtWindow)
     m_StreamConfig.fps = m_Preferences->fps;
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
 
-#ifndef STEAM_LINK
     // Opt-in to all encryption features if we detect that the platform
     // has AES cryptography acceleration instructions and more than 2 cores.
     if (StreamUtils::hasFastAes() && SDL_GetCPUCount() > 2) {
@@ -706,7 +686,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         // That hardware can hardly handle Opus decoding at all.
         m_StreamConfig.encryptionFlags = ENCFLG_AUDIO;
     }
-#endif
+
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Video bitrate: %d kbps",
@@ -1882,12 +1862,6 @@ void Session::exec()
     int x, y, width, height;
     getWindowDimensions(x, y, width, height);
 
-#ifdef STEAM_LINK
-    // We need a little delay before creating the window or we will trigger some kind
-    // of graphics driver bug on Steam Link that causes a jagged overlay to appear in
-    // the top right corner randomly.
-    SDL_Delay(500);
-#endif
 
     // Request at least 8 bits per color for GL
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
@@ -2080,12 +2054,10 @@ void Session::exec()
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
     for (;;) {
-#if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
+#if SDL_VERSION_ATLEAST(2, 0, 18)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,
-        // and Wayland. It will fall back to 1 ms polling if a joystick is
-        // connected, so we don't use it for STEAM_LINK to ensure we only poll
-        // every 10 ms.
+        // and Wayland.
         //
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
@@ -2100,13 +2072,7 @@ void Session::exec()
         // blocks this thread too long for high polling rate mice and high
         // refresh rate displays.
         if (!SDL_PollEvent(&event)) {
-#ifndef STEAM_LINK
             SDL_Delay(1);
-#else
-            // Waking every 1 ms to process input is too much for the low performance
-            // ARM core in the Steam Link, so we will wait 10 ms instead.
-            SDL_Delay(10);
-#endif
             presence.runCallbacks();
             continue;
         }

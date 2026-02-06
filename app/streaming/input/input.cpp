@@ -243,14 +243,6 @@ SdlInputHandler::~SdlInputHandler()
     // Restore the ignored devices
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, m_OldIgnoreDevices.toUtf8());
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT, m_OldIgnoreDevicesExcept.toUtf8());
-
-#ifdef STEAM_LINK
-    // Hide SDL's cursor on Steam Link after quitting the stream.
-    // FIXME: We should also do this for other situations where SDL
-    // and Qt will draw their own mouse cursors like KMSDRM or RPi
-    // video backends.
-    SDL_ShowCursor(SDL_DISABLE);
-#endif
 }
 
 void SdlInputHandler::setWindow(SDL_Window *window)

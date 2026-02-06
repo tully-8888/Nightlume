@@ -1,19 +1,9 @@
 #include "pacer.h"
 #include "streaming/streamutils.h"
 
-#ifdef Q_OS_WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#include "dxvsyncsource.h"
-#endif
-
 #ifdef Q_OS_DARWIN
 #include "../../../macos/macos_performance.h"
 #include "../../../macos/macos_debug_log.h"
-#endif
-
-#ifdef HAS_WAYLAND
-#include "waylandvsyncsource.h"
 #endif
 
 #include <SDL_syswm.h>
@@ -40,6 +30,13 @@ static_assert(PACER_MAX_OUTSTANDING_FRAMES == MAX_QUEUED_FRAMES_BALANCED + 2,
 #define OVERLOAD_HEALTHY_RESET_FRAMES 120
 #define DECODER_BACKLOG_RELAX_THRESHOLD 10
 #define DECODER_BACKLOG_RELAX_STREAK 8
+
+// Ultra-low latency mode is intentionally aggressive (single-frame queue) and can
+// be prone to visible jitter spikes during brief burst loss. Apply a tighter overload
+// guard in this mode to reduce burst-induced queue thrashing while preserving steady-
+// state latency behavior.
+#define ULTRA_LOW_RELAX_OVERFLOW_THRESHOLD 8
+#define ULTRA_LOW_RELAX_DURATION_FRAMES 300
 
 // We may be woken up slightly late so don't go all the way
 // up to the next V-sync since we may accidentally step into
@@ -369,18 +366,6 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps, bool enablePacing)
         }
 
         switch (info.subsystem) {
-    #ifdef Q_OS_WIN32
-        case SDL_SYSWM_WINDOWS:
-            m_VsyncSource = new DxVsyncSource(this);
-            break;
-    #endif
-
-    #if defined(SDL_VIDEO_DRIVER_WAYLAND) && defined(HAS_WAYLAND)
-        case SDL_SYSWM_WAYLAND:
-            m_VsyncSource = new WaylandVsyncSource(this);
-            break;
-    #endif
-
         default:
             // Platforms without a VsyncSource will just render frames
             // immediately like they used to.
@@ -483,6 +468,9 @@ void Pacer::renderFrame(AVFrame* frame)
 void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue)
 {
     int effectiveMaxQueuedFrames = m_MaxQueuedFrames;
+    const bool ultraLowMode = m_FramePacingMode == StreamingPreferences::FPM_ULTRA_LOW;
+    const int relaxOverflowThreshold = ultraLowMode ? ULTRA_LOW_RELAX_OVERFLOW_THRESHOLD : OVERLOAD_RELAX_OVERFLOW_THRESHOLD;
+    const int relaxDurationFrames = ultraLowMode ? ULTRA_LOW_RELAX_DURATION_FRAMES : OVERLOAD_RELAX_DURATION_FRAMES;
 
     // In non-balanced modes, temporarily allow one extra queued frame when
     // sustained enqueue overflow indicates persistent overload.
@@ -496,9 +484,9 @@ void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue)
 
         if (!m_OverloadRelaxationActive &&
             m_FramePacingMode != StreamingPreferences::FPM_BALANCED &&
-            m_EnqueueOverflowStreak >= OVERLOAD_RELAX_OVERFLOW_THRESHOLD) {
+            m_EnqueueOverflowStreak >= relaxOverflowThreshold) {
             m_OverloadRelaxationActive = true;
-            m_OverloadRelaxationFramesRemaining = OVERLOAD_RELAX_DURATION_FRAMES;
+            m_OverloadRelaxationFramesRemaining = relaxDurationFrames;
 #ifdef Q_OS_DARWIN
             ML_LOG_VIDEO_WARN("Pacer overload guard enabled: mode=%d, maxQueue=%d->%d",
                               (int)m_FramePacingMode, m_MaxQueuedFrames,
