@@ -15,6 +15,7 @@ BUILD_ROOT=$PWD/build
 SOURCE_ROOT=$PWD
 BUILD_FOLDER=$BUILD_ROOT/build-$BUILD_CONFIG
 INSTALLER_FOLDER=$BUILD_ROOT/installer-$BUILD_CONFIG
+APPLE_ARCHS=${QMAKE_APPLE_DEVICE_ARCHS:-"x86_64 arm64"}
 
 if [ -n "$CI_VERSION" ]; then
   VERSION=$CI_VERSION
@@ -40,12 +41,12 @@ mkdir $INSTALLER_FOLDER
 
 echo Configuring the project
 pushd $BUILD_FOLDER
-qmake $SOURCE_ROOT/moonlight-qt.pro QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64" || fail "Qmake failed!"
+qmake6 $SOURCE_ROOT/moonlight-qt.pro CONFIG+=release QMAKE_APPLE_DEVICE_ARCHS="$APPLE_ARCHS" || fail "Qmake failed!"
 popd
 
 echo Compiling Moonlight in $BUILD_CONFIG configuration
 pushd $BUILD_FOLDER
-make -j$(sysctl -n hw.logicalcpu) $(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]') || fail "Make failed!"
+make -j$(sysctl -n hw.logicalcpu) || fail "Make failed!"
 popd
 
 echo Saving dSYM file
@@ -70,9 +71,9 @@ fi
 
 echo Creating DMG
 if [ "$SIGNING_IDENTITY" != "" ]; then
-  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --identity="$SIGNING_IDENTITY" --no-version-in-filename || fail "create-dmg failed!"
+  create-dmg --identity="$SIGNING_IDENTITY" $INSTALLER_FOLDER/Moonlight.dmg $BUILD_FOLDER/app/Moonlight.app || fail "create-dmg failed!"
 else
-  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --no-version-in-filename
+  create-dmg $INSTALLER_FOLDER/Moonlight.dmg $BUILD_FOLDER/app/Moonlight.app
   case $? in
     0) ;;
     2) ;;

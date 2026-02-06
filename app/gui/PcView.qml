@@ -115,7 +115,7 @@ CenteredGridView {
         Image {
             id: pcIcon
             anchors.horizontalCenter: parent.horizontalCenter
-            source: "qrc:/res/desktop_windows-48px.svg"
+            source: "qrc:/res/desktopcomputer.svg"
             sourceSize {
                 width: 200
                 height: 200
