@@ -32,6 +32,18 @@ macx:!disable-prebuilts {
     INCLUDEPATH += $$PWD/../libs/mac/include $$PWD/../libs/mac/include/SDL2
     LIBS += -L$$PWD/../libs/mac/lib
 }
+macx:disable-prebuilts {
+    CONFIG += link_pkgconfig
+    PKGCONFIG += openssl sdl2 opus libavcodec libavutil libswscale
+
+    packagesExist(SDL2_ttf) {
+        PKGCONFIG += SDL2_ttf
+    } else:packagesExist(sdl2_ttf) {
+        PKGCONFIG += sdl2_ttf
+    } else {
+        error("CONFIG+=disable-prebuilts requires SDL2_ttf/sdl2_ttf pkg-config package")
+    }
+}
 macx {
     !disable-prebuilts {
         LIBS += -lssl.3 -lcrypto.3 -lavcodec.62 -lavutil.60 -lswscale.9 -lopus -lSDL2 -lSDL2_ttf
