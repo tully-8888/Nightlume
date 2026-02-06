@@ -38,8 +38,8 @@ jobs:
 
       - name: Build
         run: |
-          qmake6 moonlight-qt.pro
-          make -j$(sysctl -n hw.ncpu) release
+          qmake6 moonlight-qt.pro CONFIG+=release
+          make -j$(sysctl -n hw.ncpu)
 
       - name: Create DMG
         run: |
