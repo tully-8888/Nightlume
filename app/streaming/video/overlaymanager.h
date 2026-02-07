@@ -11,6 +11,7 @@ enum OverlayType {
     OverlayDebug,
     OverlayStatusUpdate,
     OverlayVsrSettings,
+    OverlayQualityBadge,
     OverlayMax
 };
 
@@ -35,6 +36,7 @@ public:
     void setOverlayTextUpdated(OverlayType type);
     void setOverlayState(OverlayType type, bool enabled);
     SDL_Color getOverlayColor(OverlayType type);
+    void setOverlayColor(OverlayType type, SDL_Color color);
     int getOverlayFontSize(OverlayType type);
     SDL_Surface* getUpdatedOverlaySurface(OverlayType type);
 

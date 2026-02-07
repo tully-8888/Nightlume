@@ -229,6 +229,13 @@ void SdlRenderer::renderOverlay(Overlay::OverlayType type)
                 m_OverlayRects[type].x = 0;
                 m_OverlayRects[type].y = 0;
             }
+            else if (type == Overlay::OverlayQualityBadge) {
+                // Top-right corner with 10px margin
+                SDL_Rect viewportRect;
+                SDL_RenderGetViewport(m_Renderer, &viewportRect);
+                m_OverlayRects[type].x = viewportRect.w - newSurface->w - 10;
+                m_OverlayRects[type].y = 10;
+            }
 
             m_OverlayRects[type].w = newSurface->w;
             m_OverlayRects[type].h = newSurface->h;

@@ -18,6 +18,9 @@ OverlayManager::OverlayManager() :
     m_Overlays[OverlayType::OverlayVsrSettings].color = {0x00, 0xCC, 0xCC, 0xFF};
     m_Overlays[OverlayType::OverlayVsrSettings].fontSize = 18;
 
+    m_Overlays[OverlayType::OverlayQualityBadge].color = {0x00, 0xCC, 0x00, 0xFF};
+    m_Overlays[OverlayType::OverlayQualityBadge].fontSize = 14;
+
     // While TTF will usually not be initialized here, it is valid for that not to
     // be the case, since Session destruction is deferred and could overlap with
     // the lifetime of a new Session object.
@@ -114,6 +117,11 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
 SDL_Color OverlayManager::getOverlayColor(OverlayType type)
 {
     return m_Overlays[type].color;
+}
+
+void OverlayManager::setOverlayColor(OverlayType type, SDL_Color color)
+{
+    m_Overlays[type].color = color;
 }
 
 void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)
