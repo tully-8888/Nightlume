@@ -2,7 +2,7 @@
 
 #include "renderer.h"
 #include <AudioToolbox/AudioToolbox.h>
-#include <mutex>
+#include <atomic>
 #include <vector>
 
 class CoreAudioRenderer : public IAudioRenderer
@@ -28,12 +28,13 @@ private:
                                    UInt32 inNumberFrames,
                                    AudioBufferList* ioData);
 
+    size_t availableSamples() const;
+    size_t freeSamples() const;
+
     AudioComponentInstance m_AudioUnit;
     std::vector<float> m_RingBuffer;
-    std::mutex m_RingBufferMutex;
-    size_t m_WritePos;
-    size_t m_ReadPos;
-    size_t m_BufferedFrames;
+    std::atomic<size_t> m_WritePos;
+    std::atomic<size_t> m_ReadPos;
     int m_ChannelCount;
     int m_SampleRate;
     void* m_AudioBuffer;

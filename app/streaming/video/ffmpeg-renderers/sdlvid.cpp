@@ -24,19 +24,10 @@ SdlRenderer::SdlRenderer()
 {
     SDL_zero(m_OverlayTextures);
 
-#ifdef HAVE_CUDA
-    m_CudaGLHelper = nullptr;
-#endif
 }
 
 SdlRenderer::~SdlRenderer()
 {
-#ifdef HAVE_CUDA
-    if (m_CudaGLHelper != nullptr) {
-        delete m_CudaGLHelper;
-    }
-#endif
-
     for (int i = 0; i < Overlay::OverlayMax; i++) {
         if (m_OverlayTextures[i] != nullptr) {
             SDL_DestroyTexture(m_OverlayTextures[i]);
@@ -182,14 +173,6 @@ bool SdlRenderer::initialize(PDECODER_PARAMETERS params)
         break;
     }
 
-#ifdef Q_OS_WIN32
-    // We render on a different thread than the main thread which is handling window
-    // messages. Without D3DCREATE_MULTITHREADED, this can cause a deadlock by blocking
-    // on a window message being processed while the main thread is blocked waiting for
-    // the render thread to finish.
-    SDL_SetHintWithPriority(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, "1", SDL_HINT_OVERRIDE);
-#endif
-
     m_Renderer = SDL_CreateRenderer(params->window, -1, rendererFlags);
     if (!m_Renderer) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -277,9 +260,6 @@ void SdlRenderer::renderFrame(AVFrame* frame)
     AVFrame* swFrame = nullptr;
 
     if (frame->hw_frames_ctx != nullptr && frame->format != AV_PIX_FMT_CUDA) {
-#ifdef HAVE_CUDA
-ReadbackRetry:
-#endif
         // If we are acting as the frontend for a hardware
         // accelerated decoder, we'll need to read the frame
         // back to render it.
@@ -293,13 +273,6 @@ ReadbackRetry:
 
     // Recreate the texture if the frame format or size changes
     if (hasFrameFormatChanged(frame)) {
-#ifdef HAVE_CUDA
-        if (m_CudaGLHelper != nullptr) {
-            delete m_CudaGLHelper;
-            m_CudaGLHelper = nullptr;
-        }
-#endif
-
         if (m_Texture != nullptr) {
             SDL_DestroyTexture(m_Texture);
             m_Texture = nullptr;
@@ -426,32 +399,12 @@ ReadbackRetry:
         // Never alpha blend this texture when rendering
         SDL_SetTextureBlendMode(m_Texture, SDL_BLENDMODE_NONE);
 
-#ifdef HAVE_CUDA
-        if (frame->format == AV_PIX_FMT_CUDA) {
-            SDL_assert(m_CudaGLHelper == nullptr);
-            m_CudaGLHelper = new CUDAGLInteropHelper(((AVHWFramesContext*)frame->hw_frames_ctx->data)->device_ctx);
-
-            SDL_GL_BindTexture(m_Texture, nullptr, nullptr);
-            if (!m_CudaGLHelper->registerBoundTextures()) {
-                // If we can't register textures, fall back to normal read-back rendering
-                delete m_CudaGLHelper;
-                m_CudaGLHelper = nullptr;
-            }
-            SDL_GL_UnbindTexture(m_Texture);
-        }
-#endif
     }
 
     if (frame->format == AV_PIX_FMT_CUDA) {
-#ifdef HAVE_CUDA
-        if (m_CudaGLHelper == nullptr || !m_CudaGLHelper->copyCudaFrameToTextures(frame)) {
-            goto ReadbackRetry;
-        }
-#else
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "Got CUDA frame, but not built with CUDA support!");
         goto Exit;
-#endif
     }
     else if (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUVJ420P) {
         SDL_UpdateYUVTexture(m_Texture, nullptr,
@@ -607,20 +560,6 @@ bool SdlRenderer::testRenderFrame(AVFrame* frame)
     // back to render it. Test that this can be done
     // for the given frame successfully.
     if (frame->hw_frames_ctx != nullptr) {
-#ifdef HAVE_MMAL
-        // FFmpeg for Raspberry Pi has NEON-optimized routines that allow
-        // us to use av_hwframe_transfer_data() to convert from SAND frames
-        // to standard fully-planar YUV. Unfortunately, the combination of
-        // doing this conversion on the CPU and the slow GL texture upload
-        // performance on the Pi make the performance of this approach
-        // unacceptable. Don't use this copyback path on the Pi by default
-        // to ensure we fall back to H.264 (with the MMAL renderer) in X11
-        // rather than using HEVC+copyback and getting terrible performance.
-        if (qgetenv("RPI_ALLOW_COPYBACK_RENDER") != "1") {
-            return false;
-        }
-#endif
-
         AVFrame* swFrame = m_SwFrameMapper.getSwFrameFromHwFrame(frame);
         if (swFrame == nullptr) {
             return false;

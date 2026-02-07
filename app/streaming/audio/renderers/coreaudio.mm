@@ -12,7 +12,6 @@ CoreAudioRenderer::CoreAudioRenderer()
     : m_AudioUnit(nullptr),
       m_WritePos(0),
       m_ReadPos(0),
-      m_BufferedFrames(0),
       m_ChannelCount(0),
       m_SampleRate(0),
       m_AudioBuffer(nullptr),
@@ -37,8 +36,9 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
     ml_stat_init(&s_AudioOverrunStats);
 
     // Allocate ring buffer for ~100ms of audio (enough to handle jitter)
-    size_t ringBufferFrames = (m_SampleRate / 10) * m_ChannelCount;
-    m_RingBuffer.resize(ringBufferFrames);
+    // +1 sample to distinguish full from empty in lock-free SPSC queue
+    size_t ringBufferSamples = ((m_SampleRate / 10) * m_ChannelCount) + 1;
+    m_RingBuffer.resize(ringBufferSamples);
 
     m_AudioBuffer = malloc(m_FrameSize);
     if (!m_AudioBuffer) {
@@ -202,63 +202,57 @@ bool CoreAudioRenderer::submitAudio(int bytesWritten)
         return true;
     }
 
-    // Don't queue if there's already more than 30 ms of audio data waiting
     if (LiGetPendingAudioDuration() > 30) {
         return true;
     }
 
-    std::lock_guard<std::mutex> lock(m_RingBufferMutex);
-
     size_t samplesToWrite = bytesWritten / sizeof(float);
     float* src = (float*)m_AudioBuffer;
-    size_t ringBufferCapacityFrames = m_RingBuffer.size() / m_ChannelCount;
-    size_t framesToWrite = samplesToWrite / m_ChannelCount;
+    size_t capacity = m_RingBuffer.size();
+    size_t writePos = m_WritePos.load(std::memory_order_relaxed);
 
-    // Keep newest audio under pressure: if incoming chunk exceeds capacity,
-    // trim the oldest part of the incoming chunk first.
-    if (framesToWrite > ringBufferCapacityFrames) {
-        size_t trimFrames = framesToWrite - ringBufferCapacityFrames;
-        src += trimFrames * m_ChannelCount;
-        samplesToWrite -= trimFrames * m_ChannelCount;
-        framesToWrite = ringBufferCapacityFrames;
-    }
-
-    size_t freeFrames = (m_BufferedFrames < ringBufferCapacityFrames)
-                        ? (ringBufferCapacityFrames - m_BufferedFrames)
-                        : 0;
-
-    if (framesToWrite > freeFrames) {
-        size_t dropFrames = framesToWrite - freeFrames;
-        if (dropFrames > m_BufferedFrames) {
-            dropFrames = m_BufferedFrames;
-        }
-
-        // Explicit overrun policy: drop oldest buffered audio to keep latency bounded.
-        m_ReadPos = (m_ReadPos + (dropFrames * m_ChannelCount)) % m_RingBuffer.size();
-        m_BufferedFrames -= dropFrames;
-
+    size_t free = freeSamples();
+    if (samplesToWrite > free) {
+        size_t dropSamples = samplesToWrite - free;
         s_AudioOverrunStats.count++;
-        ml_stat_add(&s_AudioOverrunStats, (double)dropFrames);
+        ml_stat_add(&s_AudioOverrunStats, (double)dropSamples / m_ChannelCount);
         if (ml_stat_should_log(&s_AudioOverrunStats, 5000)) {
-            ML_LOG_AUDIO_WARN("Audio overrun: dropped=%zu frames, total_overruns=%llu, avg_drop=%.1f",
-                             dropFrames, s_AudioOverrunStats.count, ml_stat_avg(&s_AudioOverrunStats));
+            ML_LOG_AUDIO_WARN("Audio overrun: dropped=%zu samples, total_overruns=%llu",
+                             dropSamples, s_AudioOverrunStats.count);
             ml_stat_reset(&s_AudioOverrunStats);
         }
+        src += dropSamples;
+        samplesToWrite = free;
     }
 
-    // Write to ring buffer
-    for (size_t i = 0; i < samplesToWrite; i++) {
-        m_RingBuffer[m_WritePos] = src[i];
-        m_WritePos = (m_WritePos + 1) % m_RingBuffer.size();
+    size_t firstChunk = capacity - writePos;
+    if (firstChunk >= samplesToWrite) {
+        memcpy(&m_RingBuffer[writePos], src, samplesToWrite * sizeof(float));
+    } else {
+        memcpy(&m_RingBuffer[writePos], src, firstChunk * sizeof(float));
+        memcpy(&m_RingBuffer[0], src + firstChunk, (samplesToWrite - firstChunk) * sizeof(float));
     }
-    m_BufferedFrames += samplesToWrite / m_ChannelCount;
 
+    m_WritePos.store((writePos + samplesToWrite) % capacity, std::memory_order_release);
     return true;
 }
 
 IAudioRenderer::AudioFormat CoreAudioRenderer::getAudioBufferFormat()
 {
     return AudioFormat::Float32NE;
+}
+
+size_t CoreAudioRenderer::availableSamples() const
+{
+    size_t write = m_WritePos.load(std::memory_order_acquire);
+    size_t read = m_ReadPos.load(std::memory_order_acquire);
+    size_t capacity = m_RingBuffer.size();
+    return (write >= read) ? (write - read) : (capacity - read + write);
+}
+
+size_t CoreAudioRenderer::freeSamples() const
+{
+    return m_RingBuffer.size() - 1 - availableSamples();
 }
 
 OSStatus CoreAudioRenderer::renderCallback(void* inRefCon,
@@ -276,27 +270,27 @@ OSStatus CoreAudioRenderer::renderCallback(void* inRefCon,
 
     size_t samplesToRead = inNumberFrames * self->m_ChannelCount;
     float* dst = (float*)ioData->mBuffers[0].mData;
+    size_t capacity = self->m_RingBuffer.size();
+    size_t readPos = self->m_ReadPos.load(std::memory_order_relaxed);
 
-    std::lock_guard<std::mutex> lock(self->m_RingBufferMutex);
-
-    size_t available = self->m_BufferedFrames * self->m_ChannelCount;
+    size_t available = self->availableSamples();
 
     if (available >= samplesToRead) {
-        // Read from ring buffer
-        for (size_t i = 0; i < samplesToRead; i++) {
-            dst[i] = self->m_RingBuffer[self->m_ReadPos];
-            self->m_ReadPos = (self->m_ReadPos + 1) % self->m_RingBuffer.size();
+        size_t firstChunk = capacity - readPos;
+        if (firstChunk >= samplesToRead) {
+            memcpy(dst, &self->m_RingBuffer[readPos], samplesToRead * sizeof(float));
+        } else {
+            memcpy(dst, &self->m_RingBuffer[readPos], firstChunk * sizeof(float));
+            memcpy(dst + firstChunk, &self->m_RingBuffer[0], (samplesToRead - firstChunk) * sizeof(float));
         }
-        self->m_BufferedFrames -= inNumberFrames;
+        self->m_ReadPos.store((readPos + samplesToRead) % capacity, std::memory_order_release);
     } else {
-        // Underrun - output silence
         memset(dst, 0, inNumberFrames * self->m_ChannelCount * sizeof(float));
         s_AudioUnderrunStats.count++;
         ML_LOG_AUDIO_WARN("Audio underrun: requested %u frames, available %zu (underrun #%llu)",
                          inNumberFrames, available / self->m_ChannelCount, s_AudioUnderrunStats.count);
     }
 
-    // Log buffer stats periodically (every 5 seconds)
     ml_stat_add(&s_AudioBufferStats, (double)available / self->m_ChannelCount);
     if (ml_stat_should_log(&s_AudioBufferStats, 5000)) {
         ML_LOG_AUDIO("Buffer stats: avg=%.1f frames, min=%.0f, max=%.0f, underruns=%llu",

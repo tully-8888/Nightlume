@@ -32,6 +32,7 @@ public:
     virtual bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info) override;
 
     virtual IFFmpegRenderer* getBackendRenderer();
+    virtual double getAverageBandwidthMbps() override;
 
     const VIDEO_STATS& getGlobalVideoStats() const;
 
@@ -105,6 +106,8 @@ private:
 
     void decoderThreadProc();
 
+    void requestIdrFrameWithCooldown(const char* reason);
+
     static int decoderThreadProcThunk(void* context);
 
     AVPacket* m_Pkt;
@@ -136,6 +139,8 @@ private:
     SDL_Thread* m_DecoderThread;
     SDL_atomic_t m_DecoderThreadShouldQuit;
     VideoEnhancement* m_VideoEnhancement;
+    uint64_t m_LastIdrRequestUs;
+    unsigned int m_SuppressedIdrRequests;
 
     // Data buffers in the queued DU are not valid
     QQueue<DECODE_UNIT> m_FrameInfoQueue;

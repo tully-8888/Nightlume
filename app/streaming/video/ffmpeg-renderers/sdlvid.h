@@ -3,10 +3,6 @@
 #include "renderer.h"
 #include "swframemapper.h"
 
-#ifdef HAVE_CUDA
-#include "cuda.h"
-#endif
-
 extern "C" {
 #include <libswscale/swscale.h>
 }
@@ -41,9 +37,5 @@ private:
     AVFrame* m_RgbFrame;
 
     SwFrameMapper m_SwFrameMapper;
-
-#ifdef HAVE_CUDA
-    CUDAGLInteropHelper* m_CudaGLHelper;
-#endif
 };
 

@@ -186,6 +186,7 @@ public:
     Q_PROPERTY(bool useDisplayLink MEMBER useDisplayLink NOTIFY useDisplayLinkChanged)
     Q_PROPERTY(bool tripleBuffering MEMBER tripleBuffering NOTIFY tripleBufferingChanged)
     Q_PROPERTY(bool suppressAWDL MEMBER suppressAWDL NOTIFY suppressAWDLChanged)
+    Q_PROPERTY(bool enableAutoReconnect MEMBER enableAutoReconnect NOTIFY enableAutoReconnectChanged)
 
     Q_INVOKABLE bool retranslate();
 
@@ -241,6 +242,7 @@ public:
     bool useDisplayLink;
     bool tripleBuffering;
     bool suppressAWDL;
+    bool enableAutoReconnect;
 
 signals:
     void displayModeChanged();
@@ -291,6 +293,7 @@ signals:
     void useDisplayLinkChanged();
     void tripleBufferingChanged();
     void suppressAWDLChanged();
+    void enableAutoReconnectChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);

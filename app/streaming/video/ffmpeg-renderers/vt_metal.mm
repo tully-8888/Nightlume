@@ -1341,7 +1341,7 @@ public:
     {
         if (@available(macOS 14, *)) {
             if (m_MetalDisplayLink != nullptr) {
-                ML_LOG_METAL("DisplayLink skipped: already active");
+                // Already active - no action needed (common case, don't spam log)
                 return;
             }
             if (!m_MetalLayer.displaySyncEnabled) {

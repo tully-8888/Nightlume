@@ -11,16 +11,7 @@
 #include "video/ffmpeg.h"
 #endif
 
-#ifdef HAVE_SLVIDEO
-#include "video/slvid.h"
-#endif
-
-#ifdef Q_OS_WIN32
-// Scaling the icon down on Win32 looks dreadful, so render at lower res
-#define ICON_SIZE 32
-#else
 #define ICON_SIZE 64
-#endif
 
 #ifdef Q_OS_DARWIN
 #include "macos/macos_performance.h"
@@ -33,6 +24,9 @@
 #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
 #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
+#define SDL_CODE_RECONNECT_NEEDED 106
+#define SDL_CODE_RECONNECT_ATTEMPT 107
+#define SDL_CODE_RECONNECT_RESULT 108
 
 #include <openssl/rand.h>
 
@@ -98,6 +92,41 @@ void Session::clConnectionTerminated(int errorCode)
 {
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
+
+    bool isRetryable = false;
+    if (s_ActiveSession->m_Preferences->enableAutoReconnect &&
+        !s_ActiveSession->m_IsReconnecting &&
+        s_ActiveSession->m_ReconnectAttempt < k_MaxReconnectAttempts) {
+        switch (errorCode) {
+        case ML_ERROR_NO_VIDEO_TRAFFIC:
+        case ML_ERROR_NO_VIDEO_FRAME:
+            isRetryable = true;
+            break;
+        case ML_ERROR_GRACEFUL_TERMINATION:
+        case ML_ERROR_PROTECTED_CONTENT:
+        case ML_ERROR_UNEXPECTED_EARLY_TERMINATION:
+        case ML_ERROR_FRAME_CONVERSION:
+            isRetryable = false;
+            break;
+        default:
+            isRetryable = true;
+            break;
+        }
+    }
+
+    if (isRetryable) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Connection terminated with retryable error %d, attempting reconnection (attempt %d/%d)",
+                    errorCode, s_ActiveSession->m_ReconnectAttempt + 1, k_MaxReconnectAttempts);
+
+        SDL_Event event;
+        event.type = SDL_USEREVENT;
+        event.user.code = SDL_CODE_RECONNECT_NEEDED;
+        event.user.data1 = nullptr;
+        event.user.data2 = nullptr;
+        SDL_PushEvent(&event);
+        return;
+    }
 
     // Display the termination dialog if this was not intended
     switch (errorCode) {
@@ -324,21 +353,6 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                 "V-sync %s",
                 enableVsync ? "enabled" : "disabled");
 
-#ifdef HAVE_SLVIDEO
-    chosenDecoder = new SLVideoDecoder(testOnly);
-    if (chosenDecoder->initialize(&params)) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "SLVideo video decoder chosen");
-        return true;
-    }
-    else {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Unable to load SLVideo decoder");
-        delete chosenDecoder;
-        chosenDecoder = nullptr;
-    }
-#endif
-
 #ifdef HAVE_FFMPEG
     chosenDecoder = new FFmpegVideoDecoder(testOnly);
     if (chosenDecoder->initialize(&params)) {
@@ -354,7 +368,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     }
 #endif
 
-#if !defined(HAVE_FFMPEG) && !defined(HAVE_SLVIDEO)
+#ifndef HAVE_FFMPEG
 #error No video decoding libraries available!
 #endif
 
@@ -592,6 +606,10 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_AudioRenderer(nullptr),
       m_AudioSampleCount(0),
       m_DropAudioEndTime(0)
+      , m_ReconnectAttempt(0)
+      , m_LastMeasuredBandwidthMbps(0)
+      , m_ReconnectTimerId(0)
+      , m_IsReconnecting(false)
 #ifdef Q_OS_DARWIN
       , m_PowerAssertionId(0)
       , m_DisplayAssertionId(0)
@@ -695,7 +713,6 @@ bool Session::initialize(QQuickWindow* qtWindow)
     m_StreamConfig.fps = m_Preferences->fps;
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
 
-#ifndef STEAM_LINK
     // Opt-in to all encryption features if we detect that the platform
     // has AES cryptography acceleration instructions and more than 2 cores.
     if (StreamUtils::hasFastAes() && SDL_GetCPUCount() > 2) {
@@ -706,7 +723,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         // That hardware can hardly handle Opus decoding at all.
         m_StreamConfig.encryptionFlags = ENCFLG_AUDIO;
     }
-#endif
+
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Video bitrate: %d kbps",
@@ -810,8 +827,8 @@ bool Session::initialize(QQuickWindow* qtWindow)
             }
         }
 
-#if 0
-        // TODO: Determine if AV1 is better depending on the decoder
+        // Probe actual AV1 hardware decode support before deprioritizing.
+        // On Apple Silicon, M3+ supports AV1 via VideoToolbox; M1/M2 do not.
         if (getDecoderAvailability(testWindow,
                                    m_Preferences->videoDecoderSelection,
                                    m_Preferences->enableYUV444 ?
@@ -820,42 +837,12 @@ bool Session::initialize(QQuickWindow* qtWindow)
                                    m_StreamConfig.width,
                                    m_StreamConfig.height,
                                    m_StreamConfig.fps) != DecoderAvailability::Hardware) {
-            // Deprioritize AV1 unless we can't hardware decode HEVC and have HDR enabled.
-            // We want to keep AV1 at the top of the list for HDR with software decoding
-            // because dav1d is higher performance than FFmpeg's HEVC software decoder.
+            // AV1 not hardware-accelerated. Deprioritize unless we need it
+            // for HDR software decoding (dav1d outperforms FFmpeg HEVC sw decoder).
             if (hevcDA == DecoderAvailability::Hardware || !m_Preferences->enableHdr) {
                 m_SupportedVideoFormats.deprioritizeByMask(VIDEO_FORMAT_MASK_AV1);
             }
         }
-#else
-        // Deprioritize AV1 unless we can't hardware decode HEVC, and have HDR enabled
-        // or we're on Windows or a non-x86 Linux/BSD.
-        //
-        // Normally, we'd assume hardware that can't decode HEVC definitely can't decode
-        // AV1 either, and we wouldn't even bother probing for AV1 support. However, some
-        // Windows business systems have HEVC support disabled in firmware from the factory,
-        // yet they can still decode AV1 in hardware. To avoid falling back to H.264 on
-        // these systems, we don't deprioritize AV1. This firmware-based HEVC licensing
-        // behavior seems to be unique to Windows, and Linux on the same system is able
-        // to decode HEVC in hardware normally using VAAPI.
-        // https://www.reddit.com/r/GeForceNOW/comments/1omsckt/psa_be_wary_of_purchasing_dell_computers_with/
-        //
-        // Some embedded Linux platforms have incomplete V4L2 decoding support which can
-        // lead to unusual cases where a system might support H.264 and AV1 but not HEVC,
-        // even if the underlying hardware supports all three. RK3588 is an example of
-        // such a SoC. To handle this situation, we will also probe for AV1 if we're on
-        // a non-x86 non-macOS UNIX system.
-        //
-        // We want to keep AV1 at the top of the list for HDR with software decoding
-        // because dav1d is higher performance than FFmpeg's HEVC software decoder.
-        if (hevcDA == DecoderAvailability::Hardware
-#if !defined(Q_OS_WIN32) && (!(defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN)) || defined(Q_PROCESSOR_X86))
-            || !m_Preferences->enableHdr
-#endif
-            ) {
-            m_SupportedVideoFormats.deprioritizeByMask(VIDEO_FORMAT_MASK_AV1);
-        }
-#endif
 
 #ifdef Q_OS_DARWIN
         {
@@ -1528,7 +1515,7 @@ void Session::toggleFullscreen()
 {
     bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
 
-#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN)
+#ifdef Q_OS_DARWIN
     // Destroy the video decoder before toggling full-screen because D3D9 can try
     // to put the window back into full-screen before we've managed to destroy
     // the renderer. This leads to excessive flickering and can cause the window
@@ -1597,6 +1584,115 @@ public:
 
     Session* m_Session;
 };
+
+class ReconnectThread : public QThread
+{
+public:
+    ReconnectThread(Session* session) :
+        QThread(nullptr),
+        m_Session(session)
+    {
+        setObjectName("Reconnect");
+    }
+
+    void run() override
+    {
+        // Tear down the dead connection first
+        LiStopConnection();
+
+        // Attempt to re-establish the connection
+        bool success = m_Session->reconnectAsync();
+
+        // Notify the main thread via SDL event
+        SDL_Event event;
+        event.type = SDL_USEREVENT;
+        event.user.code = SDL_CODE_RECONNECT_RESULT;
+        event.user.data1 = (void*)(intptr_t)success;
+        event.user.data2 = nullptr;
+        SDL_PushEvent(&event);
+    }
+
+    Session* m_Session;
+};
+
+static Uint32 reconnectTimerCallback(Uint32, void*)
+{
+    SDL_Event event;
+    event.type = SDL_USEREVENT;
+    event.user.code = SDL_CODE_RECONNECT_ATTEMPT;
+    event.user.data1 = nullptr;
+    event.user.data2 = nullptr;
+    SDL_PushEvent(&event);
+    return 0;
+}
+
+bool Session::reconnectAsync()
+{
+    try {
+        NvHTTP http(m_Computer);
+
+        QString rtspSessionUrl;
+        http.startApp(m_Computer->currentGameId != 0 ? "resume" : "launch",
+                      m_Computer->isNvidiaServerSoftware,
+                      m_App.id, &m_StreamConfig,
+                      m_Preferences->gameOptimizations,
+                      m_Preferences->playAudioOnHost,
+                      m_InputHandler->getAttachedGamepadMask(),
+                      !m_Preferences->multiController,
+                      rtspSessionUrl);
+
+        QByteArray hostnameStr = m_Computer->activeAddress.address().toUtf8();
+        QByteArray siAppVersion = m_Computer->appVersion.toUtf8();
+
+        SERVER_INFORMATION hostInfo;
+        hostInfo.address = hostnameStr.data();
+        hostInfo.serverInfoAppVersion = siAppVersion.data();
+        hostInfo.serverCodecModeSupport = m_Computer->serverCodecModeSupport;
+
+        QByteArray siGfeVersion;
+        if (!m_Computer->gfeVersion.isEmpty()) {
+            siGfeVersion = m_Computer->gfeVersion.toUtf8();
+        }
+        if (!siGfeVersion.isEmpty()) {
+            hostInfo.serverInfoGfeVersion = siGfeVersion.data();
+        }
+
+        QByteArray rtspSessionUrlStr;
+        if (!rtspSessionUrl.isEmpty()) {
+            rtspSessionUrlStr = rtspSessionUrl.toUtf8();
+            hostInfo.rtspSessionUrl = rtspSessionUrlStr.data();
+        }
+
+        int err = LiStartConnection(&hostInfo,
+                                    &m_StreamConfig,
+                                    &k_ConnCallbacks,
+                                    &m_VideoCallbacks,
+                                    &m_AudioCallbacks,
+                                    NULL, 0, NULL, 0);
+
+        if (err != 0) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "LiStartConnection() failed during reconnect: %d", err);
+            return false;
+        }
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Reconnection successful");
+        return true;
+    }
+    catch (const GfeHttpResponseException& e) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Reconnect HTTP error: %d %s", e.getStatusCode(),
+                     e.toQString().toUtf8().constData());
+        return false;
+    }
+    catch (const QtNetworkReplyException& e) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Reconnect network error: %s",
+                     e.toQString().toUtf8().constData());
+        return false;
+    }
+}
 
 // Called in a non-main thread
 bool Session::startConnectionAsync()
@@ -1882,12 +1978,6 @@ void Session::exec()
     int x, y, width, height;
     getWindowDimensions(x, y, width, height);
 
-#ifdef STEAM_LINK
-    // We need a little delay before creating the window or we will trigger some kind
-    // of graphics driver bug on Steam Link that causes a jagged overlay to appear in
-    // the top right corner randomly.
-    SDL_Delay(500);
-#endif
 
     // Request at least 8 bits per color for GL
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
@@ -2080,12 +2170,10 @@ void Session::exec()
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
     for (;;) {
-#if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
+#if SDL_VERSION_ATLEAST(2, 0, 18)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,
-        // and Wayland. It will fall back to 1 ms polling if a joystick is
-        // connected, so we don't use it for STEAM_LINK to ensure we only poll
-        // every 10 ms.
+        // and Wayland.
         //
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
@@ -2100,13 +2188,7 @@ void Session::exec()
         // blocks this thread too long for high polling rate mice and high
         // refresh rate displays.
         if (!SDL_PollEvent(&event)) {
-#ifndef STEAM_LINK
             SDL_Delay(1);
-#else
-            // Waking every 1 ms to process input is too much for the low performance
-            // ARM core in the Steam Link, so we will wait 10 ms instead.
-            SDL_Delay(10);
-#endif
             presence.runCallbacks();
             continue;
         }
@@ -2152,8 +2234,163 @@ void Session::exec()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
+
+            case SDL_CODE_RECONNECT_NEEDED:
+            {
+                if (m_VideoDecoder) {
+                    m_LastMeasuredBandwidthMbps = m_VideoDecoder->getAverageBandwidthMbps();
+                }
+
+                if (m_OriginalWindowTitle.empty()) {
+                    const char* title = SDL_GetWindowTitle(m_Window);
+                    if (title) {
+                        m_OriginalWindowTitle = title;
+                    }
+                }
+
+                SDL_LockMutex(m_DecoderLock);
+                delete m_VideoDecoder;
+                m_VideoDecoder = nullptr;
+                SDL_UnlockMutex(m_DecoderLock);
+
+                m_IsReconnecting = true;
+
+                std::string reconnectTitle = "Reconnecting... (attempt "
+                    + std::to_string(m_ReconnectAttempt + 1) + "/"
+                    + std::to_string(k_MaxReconnectAttempts) + ")";
+                SDL_SetWindowTitle(m_Window, reconnectTitle.c_str());
+
+                m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate,
+                    "Reconnecting...");
+                m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+
+                Uint32 delay = 1000 * (1 << m_ReconnectAttempt);
+                m_ReconnectAttempt++;
+                m_ReconnectTimerId = SDL_AddTimer(delay, reconnectTimerCallback, nullptr);
+                break;
+            }
+
+            case SDL_CODE_RECONNECT_ATTEMPT:
+            {
+                m_ReconnectTimerId = 0;
+
+                if (m_Preferences->autoAdjustBitrate && m_LastMeasuredBandwidthMbps > 0) {
+                    int cappedBitrate = (int)(m_LastMeasuredBandwidthMbps * 0.8 * 1000);
+                    if (cappedBitrate < m_StreamConfig.bitrate) {
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Reducing bitrate from %d to %d kbps for reconnection",
+                                    m_StreamConfig.bitrate, cappedBitrate);
+                        m_StreamConfig.bitrate = cappedBitrate;
+                    }
+                }
+
+                std::string attemptTitle = "Reconnecting... (attempt "
+                    + std::to_string(m_ReconnectAttempt) + "/"
+                    + std::to_string(k_MaxReconnectAttempts) + ")";
+                SDL_SetWindowTitle(m_Window, attemptTitle.c_str());
+
+                m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate,
+                    QString("Reconnecting... (attempt %1/%2)")
+                        .arg(m_ReconnectAttempt)
+                        .arg(k_MaxReconnectAttempts).toUtf8().constData());
+                m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+
+                auto reconnectThread = new ReconnectThread(this);
+                QObject::connect(reconnectThread, &QThread::finished,
+                                 reconnectThread, &QThread::deleteLater);
+                reconnectThread->start();
+                break;
+            }
+
+            case SDL_CODE_RECONNECT_RESULT:
+            {
+                bool success = (bool)(intptr_t)event.user.data1;
+
+                if (success) {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "Reconnection succeeded after %d attempt(s)",
+                                m_ReconnectAttempt);
+
+                    m_IsReconnecting = false;
+                    m_ReconnectAttempt = 0;
+
+                    SDL_LockMutex(m_DecoderLock);
+
+                    flushWindowEvents();
+                    SDL_PumpEvents();
+                    SDL_FlushEvent(SDL_RENDER_DEVICE_RESET);
+
+                    {
+                        int displayHz = StreamUtils::getDisplayRefreshRate(m_Window);
+                        bool enableVsync = m_Preferences->enableVsync;
+                        if (displayHz + 5 < m_StreamConfig.fps) {
+                            enableVsync = false;
+                        }
+
+                        if (!chooseDecoder(m_Preferences->videoDecoderSelection,
+                                           m_Window, m_ActiveVideoFormat, m_ActiveVideoWidth,
+                                           m_ActiveVideoHeight, m_ActiveVideoFrameRate,
+                                           enableVsync,
+                                           enableVsync && m_Preferences->framePacing,
+                                           m_Preferences->videoEnhancing,
+                                           false,
+                                           s_ActiveSession->m_VideoDecoder)) {
+                            SDL_UnlockMutex(m_DecoderLock);
+                            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                                         "Failed to recreate decoder after reconnection");
+                            m_UnexpectedTermination = true;
+                            emit displayLaunchError(tr("Failed to recreate video decoder after reconnection."));
+                            goto DispatchDeferredCleanup;
+                        }
+                    }
+
+                    LiRequestIdrFrame();
+                    m_VideoDecoder->setHdrMode(LiGetCurrentHostDisplayHdrMode());
+                    m_InputHandler->updatePointerRegionLock();
+
+                    SDL_UnlockMutex(m_DecoderLock);
+
+                    if (!m_OriginalWindowTitle.empty()) {
+                        SDL_SetWindowTitle(m_Window, m_OriginalWindowTitle.c_str());
+                        m_OriginalWindowTitle.clear();
+                    }
+
+                    m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
+                }
+                else {
+                    if (m_ReconnectAttempt < k_MaxReconnectAttempts) {
+                        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Reconnection attempt %d failed, retrying...",
+                                    m_ReconnectAttempt);
+
+                        SDL_Event retryEvent;
+                        retryEvent.type = SDL_USEREVENT;
+                        retryEvent.user.code = SDL_CODE_RECONNECT_NEEDED;
+                        retryEvent.user.data1 = nullptr;
+                        retryEvent.user.data2 = nullptr;
+                        SDL_PushEvent(&retryEvent);
+                    }
+                    else {
+                        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                                     "All %d reconnection attempts exhausted",
+                                     k_MaxReconnectAttempts);
+
+                        m_IsReconnecting = false;
+                        m_UnexpectedTermination = true;
+                        emit displayLaunchError(tr("Unable to reconnect to the host after %1 attempts.")
+                                                    .arg(k_MaxReconnectAttempts));
+
+                        SDL_Event quitEvent;
+                        quitEvent.type = SDL_QUIT;
+                        quitEvent.quit.timestamp = SDL_GetTicks();
+                        SDL_PushEvent(&quitEvent);
+                    }
+                }
+                break;
+            }
+
             default:
-                SDL_assert(false);
+                break;
             }
             break;
 
@@ -2171,6 +2408,19 @@ void Session::exec()
                     m_AudioMuted = false;
                 }
                 m_InputHandler->notifyFocusGained();
+#ifdef Q_OS_DARWIN
+                if (m_Window != nullptr) {
+                    // Ensure Dock/Cmd+Tab activation reliably brings the stream window
+                    // to the foreground on macOS.
+                    SDL_RaiseWindow(m_Window);
+
+                    // If the session is configured for fullscreen, re-assert fullscreen
+                    // on focus gain to recover from macOS Spaces/activation edge cases.
+                    if (m_IsFullScreen && !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag)) {
+                        SDL_SetWindowFullscreen(m_Window, m_FullScreenFlag);
+                    }
+                }
+#endif
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
@@ -2205,16 +2455,6 @@ void Session::exec()
                 }
 #endif
             }
-#ifdef Q_OS_WIN32
-            // We can get a resize event after being minimized. Recreating the renderer at that time can cause
-            // us to start drawing on the screen even while our window is minimized. Minimizing on Windows also
-            // moves the window to -32000, -32000 which can cause a false window display index change. Avoid
-            // that whole mess by never recreating the decoder if we're minimized.
-            else if (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_MINIMIZED) {
-                break;
-            }
-#endif
-
             if (m_FlushingWindowEventsRef > 0) {
                 // Ignore window events for renderer reset if flushing
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2426,6 +2666,12 @@ void Session::exec()
 DispatchDeferredCleanup:
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
+
+    if (m_ReconnectTimerId) {
+        SDL_RemoveTimer(m_ReconnectTimerId);
+        m_ReconnectTimerId = 0;
+    }
+    m_IsReconnecting = false;
 
     // Uncapture the mouse and hide the window immediately,
     // so we can return to the Qt GUI ASAP.

@@ -28,15 +28,6 @@
 #include "streaming/video/ffmpeg.h"
 #endif
 
-#if defined(Q_OS_WIN32)
-#include "antihookingprotection.h"
-
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#elif defined(Q_OS_LINUX)
-#include <openssl/ssl.h>
-#endif
-
 #include "cli/listapps.h"
 #include "cli/quitstream.h"
 #include "cli/startstream.h"
@@ -57,12 +48,7 @@
 #include "streaming/macos/macos_performance.h"
 #endif
 
-#if defined(Q_OS_WIN32)
-#define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
-
-// Log to file or console dynamically for Windows builds
-#define LOG_TO_FILE
-#elif !defined(QT_DEBUG) && defined(Q_OS_DARWIN)
+#if !defined(QT_DEBUG) && defined(Q_OS_DARWIN)
 // Log to file for release Mac builds
 #define LOG_TO_FILE
 #else
@@ -114,18 +100,6 @@ private:
 
 void logToLoggerStream(QString& message)
 {
-#if defined(QT_DEBUG) && defined(Q_OS_WIN32)
-    // Output log messages to a debugger if attached
-    if (IsDebuggerPresent()) {
-        thread_local QString lineBuffer;
-        lineBuffer += message;
-        if (message.endsWith('\n')) {
-            OutputDebugStringW(lineBuffer.toStdWString().c_str());
-            lineBuffer.clear();
-        }
-    }
-#endif
-
     // Strip session encryption keys and IVs from the logs
     message.replace(k_RikeyRegex, "&rikey=REDACTED");
     message.replace(k_RikeyIdRegex, "&rikeyid=REDACTED");
@@ -268,67 +242,6 @@ void ffmpegLogToDiskHandler(void* ptr, int level, const char* fmt, va_list vl)
 
 #endif
 
-#ifdef Q_OS_WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#include <DbgHelp.h>
-
-static UINT s_HitUnhandledException = 0;
-
-LONG WINAPI UnhandledExceptionHandler(struct _EXCEPTION_POINTERS *ExceptionInfo)
-{
-    // Only write a dump for the first unhandled exception
-    if (InterlockedCompareExchange(&s_HitUnhandledException, 1, 0) != 0) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
-    WCHAR dmpFileName[MAX_PATH];
-    swprintf_s(dmpFileName, L"%ls\\Moonlight-%I64u.dmp",
-               (PWCHAR)QDir::toNativeSeparators(Path::getLogDir()).utf16(), QDateTime::currentSecsSinceEpoch());
-    QString qDmpFileName = QString::fromUtf16((const char16_t*)dmpFileName);
-    HANDLE dumpHandle = CreateFileW(dmpFileName, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (dumpHandle != INVALID_HANDLE_VALUE) {
-        MINIDUMP_EXCEPTION_INFORMATION info;
-
-        info.ThreadId = GetCurrentThreadId();
-        info.ExceptionPointers = ExceptionInfo;
-        info.ClientPointers = FALSE;
-
-        DWORD typeFlags = MiniDumpWithIndirectlyReferencedMemory |
-                MiniDumpIgnoreInaccessibleMemory |
-                MiniDumpWithUnloadedModules |
-                MiniDumpWithThreadInfo;
-
-        if (MiniDumpWriteDump(GetCurrentProcess(),
-                               GetCurrentProcessId(),
-                               dumpHandle,
-                               (MINIDUMP_TYPE)typeFlags,
-                               &info,
-                               nullptr,
-                               nullptr)) {
-            qCritical() << "Unhandled exception! Minidump written to:" << qDmpFileName;
-        }
-        else {
-            qCritical() << "Unhandled exception! Failed to write dump:" << GetLastError();
-        }
-
-        CloseHandle(dumpHandle);
-    }
-    else {
-        qCritical() << "Unhandled exception! Failed to open dump file:" << qDmpFileName << "with error" << GetLastError();
-    }
-
-    // Sleep for a moment to allow the logging thread to finish up before crashing
-    if (g_AsyncLoggingEnabled) {
-        Sleep(500);
-    }
-
-    // Let the program crash and WER collect a dump
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-
-#endif
-
 #ifdef Q_OS_UNIX
 
 static int signalFds[2];
@@ -459,19 +372,8 @@ int main(int argc, char *argv[])
         qputenv("QML_DISK_CACHE_PATH", Path::getQmlCacheDir().toUtf8());
     }
 
-#ifdef Q_OS_WIN32
-    // Grab the original std handles before we potentially redirect them later
-    HANDLE oldConOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    HANDLE oldConErr = GetStdHandle(STD_ERROR_HANDLE);
-#endif
-
 #ifdef LOG_TO_FILE
     QDir tempDir(Path::getLogDir());
-
-#ifdef Q_OS_WIN32
-    // Only log to a file if the user didn't redirect stderr somewhere else
-    if (IS_UNSPECIFIED_HANDLE(oldConErr))
-#endif
     {
         s_LoggerFile = new QFile(tempDir.filePath(QString("Moonlight-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
         if (s_LoggerFile->open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -499,11 +401,6 @@ int main(int argc, char *argv[])
     av_log_set_callback(ffmpegLogToDiskHandler);
 #endif
 
-#ifdef Q_OS_WIN32
-    // Create a crash dump when we crash on Windows
-    SetUnhandledExceptionFilter(UnhandledExceptionHandler);
-#endif
-
 #ifdef LOG_TO_FILE
     // Prune the oldest existing logs if there are more than 10
     QStringList existingLogNames = tempDir.entryList(QStringList("Moonlight-*.log"), QDir::NoFilter, QDir::SortFlag::Time);
@@ -513,11 +410,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
-#if defined(Q_OS_WIN32)
-    // Force AntiHooking.dll to be statically imported and loaded
-    // by ntdll on Win32 platforms by calling a dummy function.
-    AntiHookingDummyImport();
-#elif defined(APP_IMAGE)
+#if defined(APP_IMAGE)
     // Force libssl.so to be directly linked to our binary, so
     // linuxdeployqt can find it and include it in our AppImage.
     // QtNetwork will pull it in via dlopen().
@@ -546,7 +439,6 @@ int main(int argc, char *argv[])
 #endif
     }
     else {
-#ifndef STEAM_LINK
         if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
             qInfo() << "Unable to detect Wayland or X11, so EGLFS will be used by default. Set QT_QPA_PLATFORM to override this.";
             qputenv("QT_QPA_PLATFORM", "eglfs");
@@ -580,7 +472,6 @@ int main(int argc, char *argv[])
         // even have working OpenGL implementations, so GLES is the only option.
         // See https://github.com/moonlight-stream/moonlight-qt/issues/868
         SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2");
-#endif
     }
 
     bool forceGles;
@@ -611,16 +502,6 @@ int main(int argc, char *argv[])
     qputenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1");
 #endif
 
-#if defined(Q_OS_WIN32) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    if (!qEnvironmentVariableIsSet("QT_OPENGL")) {
-        // On Windows, use ANGLE so we don't have to load OpenGL
-        // user-mode drivers into our app. OGL drivers (especially Intel)
-        // seem to crash Moonlight far more often than DirectX.
-        qputenv("QT_OPENGL", "angle");
-    }
-#endif
-
-#if !defined(Q_OS_WIN32) || QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     // Moonlight requires the non-threaded renderer because we depend
     // on being able to control the render thread by blocking in the
     // main thread (and pumping events from the main thread when needed).
@@ -630,7 +511,6 @@ int main(int argc, char *argv[])
     // NB: Windows defaults to the "windows" non-threaded render loop on
     // Qt 5 and the threaded render loop on Qt 6.
     qputenv("QSG_RENDER_LOOP", "basic");
-#endif
 
 #if defined(Q_OS_DARWIN) && defined(QT_DEBUG)
     // Enable Metal valiation for debug builds
@@ -668,16 +548,6 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-#ifdef STEAM_LINK
-    // Steam Link requires that we initialize video before creating our
-    // QGuiApplication in order to configure the framebuffer correctly.
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "SDL_InitSubSystem(SDL_INIT_VIDEO) failed: %s",
-                     SDL_GetError());
-        return -1;
-    }
-#endif
 
     // Use atexit() to ensure SDL_Quit() is called. This avoids
     // racing with object destruction where SDL may be used.
@@ -734,36 +604,6 @@ int main(int argc, char *argv[])
     configureSignalHandlers();
 #endif
 
-#ifdef Q_OS_WIN32
-    // If we don't have stdout or stderr handles (which will normally be the case
-    // since we're a /SUBSYSTEM:WINDOWS app), attach to our parent console and use
-    // that for stdout and stderr.
-    //
-    // If we do have stdout or stderr handles, that means the user has used standard
-    // handle redirection. In that case, we don't want to override those handles.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        // If we didn't have an old stdout/stderr handle, use the new CONOUT$ handle
-        if (IS_UNSPECIFIED_HANDLE(oldConOut)) {
-            FILE* fp;
-            if (freopen_s(&fp, "CONOUT$", "w", stdout) == 0) {
-                setvbuf(fp, NULL, _IONBF, 0);
-            }
-            else {
-                freopen_s(&fp, "NUL", "w", stdout);
-            }
-        }
-        if (IS_UNSPECIFIED_HANDLE(oldConErr)) {
-            FILE* fp;
-            if (freopen_s(&fp, "CONOUT$", "w", stderr) == 0) {
-                setvbuf(fp, NULL, _IONBF, 0);
-            }
-            else {
-                freopen_s(&fp, "NUL", "w", stderr);
-            }
-        }
-    }
-#endif
-
     GlobalCommandLineParser parser;
     GlobalCommandLineParser::ParseResult commandLineParserResult = parser.parse(app.arguments());
     switch (commandLineParserResult) {
@@ -810,40 +650,11 @@ int main(int argc, char *argv[])
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Detected Wayland");
         qputenv("SDL_VIDEODRIVER", "wayland");
     }
-#ifndef STEAM_LINK
     // Force use of the KMSDRM backend for SDL when using Qt platform plugins
     // that directly draw to the display without a windowing system.
     else if (QGuiApplication::platformName() == "eglfs" || QGuiApplication::platformName() == "linuxfb") {
         qputenv("SDL_VIDEODRIVER", "kmsdrm");
     }
-#endif
-
-#ifdef STEAM_LINK
-    // Qt 5.9 from the Steam Link SDK is not able to load any fonts
-    // since the Steam Link doesn't include any of the ones it looks
-    // for. We know it has NotoSans so we will explicitly ask for that.
-    if (app.font().family().isEmpty()) {
-        qWarning() << "SL HACK: No default font - using NotoSans";
-
-        QFont fon("NotoSans");
-        app.setFont(fon);
-    }
-
-    // Move the mouse to the bottom right so it's invisible when using
-    // gamepad-only navigation.
-    QCursor().setPos(0xFFFF, 0xFFFF);
-#elif !SDL_VERSION_ATLEAST(2, 0, 11) && defined(Q_OS_LINUX) && (defined(__arm__) || defined(__aarch64__))
-    if (qgetenv("SDL_VIDEO_GL_DRIVER").isEmpty() && QGuiApplication::platformName() == "eglfs") {
-        // Look for Raspberry Pi GLES libraries. SDL 2.0.10 and earlier needs some help finding
-        // the correct libraries for the KMSDRM backend if not compiled with the RPI backend enabled.
-        if (SDL_LoadObject("libbrcmGLESv2.so") != nullptr) {
-            qputenv("SDL_VIDEO_GL_DRIVER", "libbrcmGLESv2.so");
-        }
-        else if (SDL_LoadObject("/opt/vc/lib/libbrcmGLESv2.so") != nullptr) {
-            qputenv("SDL_VIDEO_GL_DRIVER", "/opt/vc/lib/libbrcmGLESv2.so");
-        }
-    }
-#endif
 
 #ifndef Q_OS_DARWIN
     // Set the window icon except on macOS where we want to keep the
@@ -990,13 +801,6 @@ int main(int argc, char *argv[])
 
     // Wait for pending log messages to be printed
     s_LoggerThread.waitForDone();
-
-#ifdef Q_OS_WIN32
-    // Without an explicit flush, console redirection for the list command
-    // doesn't work reliably (sometimes the target file contains no text).
-    fflush(stderr);
-    fflush(stdout);
-#endif
 
     return err;
 }

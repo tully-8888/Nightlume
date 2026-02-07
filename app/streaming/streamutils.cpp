@@ -7,65 +7,11 @@
 #include <ApplicationServices/ApplicationServices.h>
 #endif
 
-#ifdef Q_OS_WINDOWS
-#include <Windows.h>
-#endif
-
 #ifdef Q_OS_UNIX
 #include <unistd.h>
 #include <fcntl.h>
 
 #include <SDL_syswm.h>
-#endif
-
-#ifdef Q_OS_LINUX
-#include <sys/auxv.h>
-
-#if defined(Q_PROCESSOR_ARM)
-
-#ifndef HWCAP2_AES
-#define HWCAP2_AES (1 << 0)
-#endif
-
-#elif defined(Q_PROCESSOR_RISCV)
-
-#if __has_include(<sys/hwprobe.h>)
-#include <sys/hwprobe.h>
-#else
-#include <unistd.h>
-
-#if __has_include(<asm/hwprobe.h>)
-#include <asm/hwprobe.h>
-#include <sys/syscall.h>
-#else
-#define __NR_riscv_hwprobe 258
-struct riscv_hwprobe {
-    int64_t key;
-    uint64_t value;
-};
-#define RISCV_HWPROBE_KEY_IMA_EXT_0 4
-#endif
-
-// RISC-V Scalar AES [E]ncryption and [D]ecryption
-#ifndef RISCV_HWPROBE_EXT_ZKND
-#define RISCV_HWPROBE_EXT_ZKND (1 << 11)
-#define RISCV_HWPROBE_EXT_ZKNE (1 << 12)
-#endif
-
-// RISC-V Vector AES
-#ifndef RISCV_HWPROBE_EXT_ZVKNED
-#define RISCV_HWPROBE_EXT_ZVKNED (1 << 21)
-#endif
-
-static int __riscv_hwprobe(struct riscv_hwprobe *pairs, size_t pair_count,
-                           size_t cpu_count, unsigned long *cpus,
-                           unsigned int flags)
-{
-    return syscall(__NR_riscv_hwprobe, pairs, pair_count, cpu_count, cpus, flags);
-}
-
-#endif
-#endif
 #endif
 
 #if defined(Q_OS_FREEBSD) || defined(Q_OS_OPENBSD)
@@ -76,9 +22,6 @@ Uint32 StreamUtils::getPlatformWindowFlags()
 {
 #if defined(Q_OS_DARWIN)
     return SDL_WINDOW_METAL;
-#elif defined(HAVE_LIBPLACEBO_VULKAN)
-    // We'll fall back to GL if Vulkan fails
-    return SDL_WINDOW_VULKAN;
 #else
     return 0;
 #endif
@@ -171,8 +114,6 @@ bool StreamUtils::hasFastAes()
     return __builtin_cpu_supports("aes");
 #elif defined(__BUILTIN_CPU_SUPPORTS__) && defined(Q_PROCESSOR_POWER)
     return __builtin_cpu_supports("vcrypto");
-#elif defined(Q_OS_WINDOWS) && defined(Q_PROCESSOR_ARM)
-    return IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE);
 #elif defined(_MSC_VER) && defined(Q_PROCESSOR_X86)
     int regs[4];
     __cpuid(regs, 1);
@@ -188,22 +129,6 @@ bool StreamUtils::hasFastAes()
     unsigned long hwcap = 0;
     elf_aux_info(AT_HWCAP, &hwcap, sizeof(hwcap));
     return (hwcap & HWCAP_AES);
-#elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_ARM) && QT_POINTER_SIZE == 4
-    return getauxval(AT_HWCAP2) & HWCAP2_AES;
-#elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_ARM) && QT_POINTER_SIZE == 8
-    return getauxval(AT_HWCAP) & HWCAP_AES;
-#elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_RISCV)
-    riscv_hwprobe pairs[1] = {
-        { RISCV_HWPROBE_KEY_IMA_EXT_0, 0 },
-    };
-
-    // If this syscall is not implemented, we'll get -ENOSYS
-    // and the value field will remain zero.
-    __riscv_hwprobe(pairs, SDL_arraysize(pairs), 0, nullptr, 0);
-
-    return (pairs[0].value & (RISCV_HWPROBE_EXT_ZKNE | RISCV_HWPROBE_EXT_ZKND)) ==
-               (RISCV_HWPROBE_EXT_ZKNE | RISCV_HWPROBE_EXT_ZKND) ||
-           (pairs[0].value & RISCV_HWPROBE_EXT_ZVKNED);
 #elif QT_POINTER_SIZE == 4
     #warning Unknown 32-bit platform. Assuming AES is slow on this CPU.
     return false;
