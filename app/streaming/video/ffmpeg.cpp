@@ -1745,7 +1745,6 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     // No output data, so let's try to submit more input data,
                     // while we're waiting for this to frame to come back.
                     if (LiPollNextVideoFrame(&handle, &du)) {
-                        // FIXME: Handle EAGAIN on avcodec_send_packet() properly?
                         LiCompleteVideoFrame(handle, submitDecodeUnit(du));
                     }
                     else {
@@ -1756,7 +1755,12 @@ void FFmpegVideoDecoder::decoderThreadProc()
                 else {
                     char errorstring[512];
 
-                    // FIXME: Should we pop an entry off m_FrameInfoQueue here?
+                    // The frame was sent but the decoder failed to produce output.
+                    // Pop the corresponding queue entry to keep the queue synchronized.
+                    if (!m_FrameInfoQueue.isEmpty()) {
+                        m_FrameInfoQueue.dequeue();
+                    }
+                    m_FramesOut++;
 
                     av_strerror(err, errorstring, sizeof(errorstring));
                     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -1887,6 +1891,16 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     ml_stat_add(&s_SendPacketStats, (double)(LiGetMicroseconds() - sendStartUs));
 #endif
     if (err < 0) {
+        if (err == AVERROR(EAGAIN)) {
+            // Decoder's internal buffer is full. This is a transient condition
+            // with async decoders like VideoToolbox, not a decode failure.
+            // Don't count this toward the consecutive failure threshold.
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "avcodec_send_packet() returned EAGAIN (frame %d)",
+                        du->frameNumber);
+            return DR_NEED_IDR;
+        }
+
         char errorstring[512];
         av_strerror(err, errorstring, sizeof(errorstring));
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
