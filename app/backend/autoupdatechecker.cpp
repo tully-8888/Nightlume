@@ -34,7 +34,7 @@ void AutoUpdateChecker::start()
         return;
     }
 
-#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN) || defined(APP_IMAGE) // Only run update checker on platforms without auto-update
+#if defined(Q_OS_DARWIN) || defined(APP_IMAGE) // Only run update checker on platforms without auto-update
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0) && QT_VERSION < QT_VERSION_CHECK(5, 15, 1) && !defined(QT_NO_BEARERMANAGEMENT)
     // HACK: Set network accessibility to work around QTBUG-80947 (introduced in Qt 5.14.0 and fixed in Qt 5.15.1)
     QT_WARNING_PUSH

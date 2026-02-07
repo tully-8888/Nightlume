@@ -11,12 +11,7 @@
 #include "video/ffmpeg.h"
 #endif
 
-#ifdef Q_OS_WIN32
-// Scaling the icon down on Win32 looks dreadful, so render at lower res
-#define ICON_SIZE 32
-#else
 #define ICON_SIZE 64
-#endif
 
 #ifdef Q_OS_DARWIN
 #include "macos/macos_performance.h"
@@ -829,10 +824,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         // We want to keep AV1 at the top of the list for HDR with software decoding
         // because dav1d is higher performance than FFmpeg's HEVC software decoder.
         if (hevcDA == DecoderAvailability::Hardware
-#if !defined(Q_OS_WIN32) && (!(defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN)) || defined(Q_PROCESSOR_X86))
-            || !m_Preferences->enableHdr
-#endif
-            ) {
+            || !m_Preferences->enableHdr) {
             m_SupportedVideoFormats.deprioritizeByMask(VIDEO_FORMAT_MASK_AV1);
         }
 #endif
@@ -1508,7 +1500,7 @@ void Session::toggleFullscreen()
 {
     bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
 
-#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN)
+#ifdef Q_OS_DARWIN
     // Destroy the video decoder before toggling full-screen because D3D9 can try
     // to put the window back into full-screen before we've managed to destroy
     // the renderer. This leads to excessive flickering and can cause the window
@@ -2184,16 +2176,6 @@ void Session::exec()
                 }
 #endif
             }
-#ifdef Q_OS_WIN32
-            // We can get a resize event after being minimized. Recreating the renderer at that time can cause
-            // us to start drawing on the screen even while our window is minimized. Minimizing on Windows also
-            // moves the window to -32000, -32000 which can cause a false window display index change. Avoid
-            // that whole mess by never recreating the decoder if we're minimized.
-            else if (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_MINIMIZED) {
-                break;
-            }
-#endif
-
             if (m_FlushingWindowEventsRef > 0) {
                 // Ignore window events for renderer reset if flushing
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,

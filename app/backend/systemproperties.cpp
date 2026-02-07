@@ -8,11 +8,6 @@
 #include "streaming/streamutils.h"
 #include "streaming/video/videoenhancement.h"
 
-#ifdef Q_OS_WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#endif
-
 class SystemPropertyQueryThread : public QThread
 {
 public:
@@ -54,30 +49,7 @@ SystemProperties::SystemProperties()
     usesMaterial3Theme = QLibraryInfo::version() >= QVersionNumber(6, 5, 0);
     QString nativeArch = QSysInfo::currentCpuArchitecture();
 
-#ifdef Q_OS_WIN32
-    {
-        USHORT processArch, machineArch;
-
-        // Use IsWow64Process2() because it doesn't lie on ARM64
-        if (IsWow64Process2(GetCurrentProcess(), &processArch, &machineArch)) {
-            switch (machineArch) {
-            case IMAGE_FILE_MACHINE_I386:
-                nativeArch = "i386";
-                break;
-            case IMAGE_FILE_MACHINE_AMD64:
-                nativeArch = "x86_64";
-                break;
-            case IMAGE_FILE_MACHINE_ARM64:
-                nativeArch = "arm64";
-                break;
-            }
-        }
-
-        isWow64 = nativeArch != QSysInfo::buildCpuArchitecture();
-    }
-#else
     isWow64 = false;
-#endif
 
     if (nativeArch == "i386") {
         friendlyNativeArchName = "x86";
@@ -306,11 +278,7 @@ bool SystemProperties::isVideoEnhancementExperimental()
  */
 bool SystemProperties::isVideoEnhancementSwitchable()
 {
-#if defined(QT_DEBUG) && defined(Q_OS_WIN)
-    return true;
-#else
     return false;
-#endif
 }
 
 /**

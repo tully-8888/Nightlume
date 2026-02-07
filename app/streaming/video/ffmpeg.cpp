@@ -16,12 +16,6 @@ extern "C" {
 #include "../macos/macos_debug_log.h"
 #endif
 
-#ifdef Q_OS_WIN32
-#include "ffmpeg-renderers/dxva2.h"
-#include "ffmpeg-renderers/d3d11va.h"
-#include "ffmpeg-renderers/d3d12va.h"
-#endif
-
 #ifdef Q_OS_DARWIN
 #include "ffmpeg-renderers/vt.h"
 #include <pthread/qos.h>
@@ -352,22 +346,8 @@ bool FFmpegVideoDecoder::initializeRendererInternal(IFFmpegRenderer* renderer, P
     return true;
 }
 
-bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool useAlternateFrontend)
+bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool /*useAlternateFrontend*/)
 {
-    // For cases where we're already using Vulkan Video decoding, always use the Vulkan renderer too.
-    // The alternate frontend logic is primarily for cases where a different renderer like EGL or DRM
-    // may provide additional performance or HDR capabilities. Neither of these are true for Vulkan.
-    if (useAlternateFrontend && m_BackendRenderer->getRendererType() != IFFmpegRenderer::RendererType::Vulkan) {
-        if (params->videoFormat & VIDEO_FORMAT_MASK_10BIT) {
-        }
-        else
-        {
-        }
-
-        // If we made it here, we failed to create the EGLRenderer
-        return false;
-    }
-
     if (m_BackendRenderer->isDirectRenderingSupported()) {
         // The backend renderer can render to the display
         m_FrontendRenderer = m_BackendRenderer;
@@ -944,18 +924,6 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
     // First pass using our top-tier hwaccel implementations
     if (pass == 0) {
         switch (hwDecodeCfg->device_type) {
-#ifdef Q_OS_WIN32
-        // DXVA2 appears in the hwaccel list before D3D11VA, so we only check for D3D11VA
-        // on the first pass to ensure we prefer D3D11VA over DXVA2.
-        case AV_HWDEVICE_TYPE_D3D11VA:
-            if (!params->enableVideoEnhancement){
-                return new D3D11VARenderer(pass);
-            }
-            // Do not break here
-        case AV_HWDEVICE_TYPE_D3D12VA:
-            // D3D12VARenderer is also able to receive frame from AV_HWDEVICE_TYPE_D3D11VA via Interop
-            return new D3D12VARenderer(pass);
-#endif
 #ifdef Q_OS_DARWIN
         case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
             // Prefer the Metal renderer if hardware is compatible
@@ -971,21 +939,6 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
     // Second pass for our second-tier hwaccel implementations
     else if (pass == 1) {
         switch (hwDecodeCfg->device_type) {
-#ifdef Q_OS_WIN32
-        // This gives us another shot if D3D11VA/D3D12VA failed in the first pass.
-        // Since DXVA2 is in the hwaccel list first, we'll first try to fall back
-        // to that before giving D3D11VA/D3D12VA another try as a last resort.
-        case AV_HWDEVICE_TYPE_DXVA2:
-            return new DXVA2Renderer(pass);
-        case AV_HWDEVICE_TYPE_D3D11VA:
-            if (!params->enableVideoEnhancement){
-                return new D3D11VARenderer(pass);
-            }
-            // Do not break here
-        case AV_HWDEVICE_TYPE_D3D12VA:
-            // D3D12VARenderer is also able to receive frame from AV_HWDEVICE_TYPE_D3D11VA via Interop
-            return new D3D12VARenderer(pass);
-#endif
 #ifdef Q_OS_DARWIN
         case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
             // Use the older AVSampleBufferDisplayLayer if Metal cannot be used

@@ -3,10 +3,6 @@
 #include <QCommandLineParser>
 #include <QRegularExpression>
 
-#if defined(Q_OS_WIN)
-#include <qt_windows.h>
-#endif
-
 static bool inRange(int value, int min, int max)
 {
     return value >= min && value <= max;

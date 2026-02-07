@@ -37,17 +37,7 @@ class IFFmpegRenderer : public Overlay::IOverlayRenderer {
 public:
     enum class RendererType {
         Unknown,
-        Vulkan,
-        CUDA,
-        D3D11VA,
-        D3D12VA,
-        DRM,
-        DXVA2,
-        EGL,
-        MMAL,
         SDL,
-        VAAPI,
-        VDPAU,
         VTSampleLayer,
         VTMetal,
     };
@@ -207,28 +197,8 @@ public:
         default:
         case RendererType::Unknown:
             return "Unknown";
-        case RendererType::Vulkan:
-            return "Vulkan (libplacebo)";
-        case RendererType::CUDA:
-            return "CUDA";
-        case RendererType::D3D11VA:
-            return "D3D11VA";
-        case RendererType::D3D12VA:
-            return "D3D12VA";
-        case RendererType::DRM:
-            return "DRM";
-        case RendererType::DXVA2:
-            return "DXVA2 (D3D9)";
-        case RendererType::EGL:
-            return "EGL/GLES";
-        case RendererType::MMAL:
-            return "MMAL";
         case RendererType::SDL:
             return "SDL";
-        case RendererType::VAAPI:
-            return "VAAPI";
-        case RendererType::VDPAU:
-            return "VDPAU";
         case RendererType::VTSampleLayer:
             return "VideoToolbox (AVSampleBufferDisplayLayer)";
         case RendererType::VTMetal:

@@ -31,13 +31,8 @@ bool WMUtils::isRunningWayland()
 
 bool WMUtils::isRunningWindowManager()
 {
-#if defined(Q_OS_WIN) || defined(Q_OS_DARWIN)
     // Windows and macOS are always running a window manager
     return true;
-#else
-    // On Unix OSes, look for Wayland or X
-    return WMUtils::isRunningWayland() || WMUtils::isRunningX11();
-#endif
 }
 
 bool WMUtils::isRunningDesktopEnvironment()
@@ -47,14 +42,8 @@ bool WMUtils::isRunningDesktopEnvironment()
         return value;
     }
 
-#if defined(Q_OS_WIN) || defined(Q_OS_DARWIN)
     // Windows and macOS are always running a desktop environment
     return true;
-#else
-    // On non-embedded systems, assume we have a desktop environment
-    // if we have a WM running.
-    return isRunningWindowManager();
-#endif
 }
 
 bool WMUtils::isGpuSlow()
