@@ -204,7 +204,7 @@ void SdlInputHandler::updateVsrOverlayText()
     char* textBuf = overlayMgr.getOverlayText(Overlay::OverlayVsrSettings);
     
     char sectionTabs[100];
-    snprintf(sectionTabs, sizeof(sectionTabs), "%s%s%s  %s%s%s  %s%s%s  %s%s%s",
+    snprintf(sectionTabs, sizeof(sectionTabs), "%s%s%s  %s%s%s  %s%s%s  %s%s%s  %s%s%s",
         m_VsrOverlaySelectedSection == 0 ? "[" : " ",
         "VSR",
         m_VsrOverlaySelectedSection == 0 ? "]" : " ",
@@ -216,7 +216,10 @@ void SdlInputHandler::updateVsrOverlayText()
         m_VsrOverlaySelectedSection == 2 ? "]" : " ",
         m_VsrOverlaySelectedSection == 3 ? "[" : " ",
         "Perf",
-        m_VsrOverlaySelectedSection == 3 ? "]" : " ");
+        m_VsrOverlaySelectedSection == 3 ? "]" : " ",
+        m_VsrOverlaySelectedSection == 4 ? "[" : " ",
+        "Quality",
+        m_VsrOverlaySelectedSection == 4 ? "]" : " ");
     
     char contentLines[800] = "";
     
@@ -247,7 +250,7 @@ void SdlInputHandler::updateVsrOverlayText()
             "%s Mute on Focus Loss:  [%s]",
             m_VsrOverlaySelectedRow == 0 ? ">" : " ",
             prefs->muteOnFocusLoss ? "ON " : "OFF");
-    } else {
+    } else if (m_VsrOverlaySelectedSection == 3) {
         bool isHdr = !!(Session::get()->m_ActiveVideoFormat & VIDEO_FORMAT_MASK_10BIT);
         bool isVrr = !prefs->enableVsync;
         snprintf(contentLines, sizeof(contentLines),
@@ -263,10 +266,48 @@ void SdlInputHandler::updateVsrOverlayText()
             prefs->tripleBuffering ? "ON " : "OFF",
             isHdr ? "ON " : "OFF",
             isVrr ? "ON " : "OFF");
+    } else if (m_VsrOverlaySelectedSection == 4) {
+        Session* session = Session::get();
+        const char* badgeText = overlayMgr.getOverlayText(Overlay::OverlayQualityBadge);
+        if (badgeText[0] == '\0') {
+            badgeText = "[--]";
+        }
+
+        uint32_t estimatedRtt = 0;
+        uint32_t estimatedRttVariance = 0;
+        bool hasRtt = LiGetEstimatedRttInfo(&estimatedRtt, &estimatedRttVariance);
+
+        char latencyText[64];
+        if (hasRtt) {
+            snprintf(latencyText, sizeof(latencyText), "%u ms (±%u)", estimatedRtt, estimatedRttVariance);
+        } else {
+            snprintf(latencyText, sizeof(latencyText), "N/A");
+        }
+
+        const RTP_VIDEO_STATS* rtpVideoStats = LiGetRTPVideoStats();
+        uint32_t droppedPackets = rtpVideoStats != nullptr ? rtpVideoStats->packetCountFecFailed : 0;
+        double bitrateMbps = session->getConfiguredBitrateKbps() / 1000.0;
+
+        snprintf(contentLines, sizeof(contentLines),
+            "%s Status:   %s\n"
+            "%s FPS:      %d target\n"
+            "%s Latency:  %s\n"
+            "%s Drops:    %u\n"
+            "%s Bitrate:  %.1f Mbps",
+            m_VsrOverlaySelectedRow == 0 ? ">" : " ",
+            badgeText,
+            m_VsrOverlaySelectedRow == 1 ? ">" : " ",
+            session->m_ActiveVideoFrameRate,
+            m_VsrOverlaySelectedRow == 2 ? ">" : " ",
+            latencyText,
+            m_VsrOverlaySelectedRow == 3 ? ">" : " ",
+            droppedPackets,
+            m_VsrOverlaySelectedRow == 4 ? ">" : " ",
+            bitrateMbps);
     }
     
     snprintf(textBuf, overlayMgr.getOverlayMaxTextLength(),
-        "Live Settings (Ctrl+G close, Tab=section)\n"
+        "Live Settings (Ctrl+G/Q close, Tab=section)\n"
         "════════════════════════════════════════\n"
         "%s\n"
         "────────────────────────────────────────\n"
@@ -316,15 +357,15 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         }
         else {
         
-        int sectionRowCounts[] = {3, 3, 1, 3};
+        int sectionRowCounts[] = {3, 3, 1, 3, 5};
         int currentSectionRowCount = sectionRowCounts[m_VsrOverlaySelectedSection];
         
         switch (event->keysym.sym) {
         case SDLK_TAB:
             if (event->keysym.mod & KMOD_SHIFT) {
-                m_VsrOverlaySelectedSection = (m_VsrOverlaySelectedSection + 3) % 4;
+                m_VsrOverlaySelectedSection = (m_VsrOverlaySelectedSection + 4) % 5;
             } else {
-                m_VsrOverlaySelectedSection = (m_VsrOverlaySelectedSection + 1) % 4;
+                m_VsrOverlaySelectedSection = (m_VsrOverlaySelectedSection + 1) % 5;
             }
             m_VsrOverlaySelectedRow = 0;
             break;
@@ -353,7 +394,7 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
                 }
             } else if (m_VsrOverlaySelectedSection == 2) {
                 prefs->muteOnFocusLoss = !prefs->muteOnFocusLoss;
-            } else {
+            } else if (m_VsrOverlaySelectedSection == 3) {
                 if (m_VsrOverlaySelectedRow == 0) {
                     prefs->framePacing = !prefs->framePacing;
                 } else if (m_VsrOverlaySelectedRow == 1) {
@@ -361,6 +402,8 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
                 } else {
                     prefs->tripleBuffering = !prefs->tripleBuffering;
                 }
+            } else if (m_VsrOverlaySelectedSection == 4) {
+                // Quality tab is read-only - no action
             }
             break;
         case SDLK_RIGHT:
@@ -382,7 +425,7 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
                 }
             } else if (m_VsrOverlaySelectedSection == 2) {
                 prefs->muteOnFocusLoss = !prefs->muteOnFocusLoss;
-            } else {
+            } else if (m_VsrOverlaySelectedSection == 3) {
                 if (m_VsrOverlaySelectedRow == 0) {
                     prefs->framePacing = !prefs->framePacing;
                 } else if (m_VsrOverlaySelectedRow == 1) {
@@ -390,6 +433,8 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
                 } else {
                     prefs->tripleBuffering = !prefs->tripleBuffering;
                 }
+            } else if (m_VsrOverlaySelectedSection == 4) {
+                // Quality tab is read-only - no action
             }
             break;
         case SDLK_RETURN:
@@ -412,7 +457,7 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
                 }
             } else if (m_VsrOverlaySelectedSection == 2) {
                 prefs->muteOnFocusLoss = !prefs->muteOnFocusLoss;
-            } else {
+            } else if (m_VsrOverlaySelectedSection == 3) {
                 if (m_VsrOverlaySelectedRow == 0) {
                     prefs->framePacing = !prefs->framePacing;
                 } else if (m_VsrOverlaySelectedRow == 1) {
@@ -420,6 +465,8 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
                 } else {
                     prefs->tripleBuffering = !prefs->tripleBuffering;
                 }
+            } else if (m_VsrOverlaySelectedSection == 4) {
+                // Quality tab is read-only - no action
             }
             break;
         case SDLK_ESCAPE:
@@ -443,6 +490,13 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
             (event->keysym.mod & KMOD_CTRL) &&
             (event->keysym.mod & KMOD_ALT) &&
             (event->keysym.mod & KMOD_SHIFT)) {
+        if (m_SpecialKeyCombos[KeyComboToggleQualityView].enabled &&
+            (event->keysym.sym == m_SpecialKeyCombos[KeyComboToggleQualityView].keyCode ||
+             event->keysym.scancode == m_SpecialKeyCombos[KeyComboToggleQualityView].scanCode)) {
+            performSpecialKeyCombo(KeyComboToggleQualityView);
+            return;
+        }
+
         // First we test the SDLK combos for matches,
         // that way we ensure that latin keyboard users
         // can match to the key they see on their keyboards.
