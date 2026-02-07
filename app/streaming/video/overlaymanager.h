@@ -54,6 +54,7 @@ private:
         TTF_Font* font;
         SDL_Surface* surface;
     } m_Overlays[OverlayMax];
+    SDL_mutex* m_Lock;
     IOverlayRenderer* m_Renderer;
     QByteArray m_FontData;
 };

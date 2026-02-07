@@ -2164,7 +2164,7 @@ void Session::exec()
     m_OverlayManager.setOverlayState(Overlay::OverlayDebug, m_Preferences->showPerformanceOverlay);
 
     // Always show initial stream quality badge
-    m_OverlayManager.updateOverlayText(Overlay::OverlayQualityBadge, "[OK]");
+    m_OverlayManager.updateOverlayText(Overlay::OverlayQualityBadge, "[--]");
     m_OverlayManager.setOverlayState(Overlay::OverlayQualityBadge, true);
 
     // Switch to async logging mode when we enter the SDL loop

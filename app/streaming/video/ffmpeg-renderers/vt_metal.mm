@@ -1152,10 +1152,11 @@ public:
         // Set VRR-aware frame rate range
         // preferred=streamFPS tells macOS to match stream cadence
         // maximum=maxDisplayRefresh enables VRR on ProMotion displays
-        m_FrameRateRange = CAFrameRateRangeMake(params->frameRate, maxDisplayRefresh, params->frameRate);
+        int clampedFps = MIN((int)maxDisplayRefresh, params->frameRate);
+        m_FrameRateRange = CAFrameRateRangeMake(clampedFps, maxDisplayRefresh, clampedFps);
         
         ML_LOG_METAL("VRR frame pacing: stream=%dFPS, display=%ldHz, preferred=%dFPS",
-            params->frameRate, (long)maxDisplayRefresh, params->frameRate);
+            params->frameRate, (long)maxDisplayRefresh, clampedFps);
 
         id<MTLDevice> device = getMetalDevice();
         if (!device) {

@@ -1801,6 +1801,11 @@ static constexpr int QUALITY_YELLOW_RTT_MS = 80;
 static constexpr float QUALITY_GREEN_DROP_PCT = 0.5f;
 static constexpr float QUALITY_YELLOW_DROP_PCT = 3.0f;
 
+// Shared quality indicator colors (used by both debug overlay and badge)
+static const SDL_Color QUALITY_COLOR_GREEN  = {0x00, 0xCC, 0x00, 0xFF};
+static const SDL_Color QUALITY_COLOR_YELLOW = {0xD0, 0xD0, 0x00, 0xFF};
+static const SDL_Color QUALITY_COLOR_RED    = {0xCC, 0x00, 0x00, 0xFF};
+
 int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 {
     PLENTRY entry = du->bufferList;
@@ -1845,11 +1850,11 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
                 SDL_Color statsColor;
                 if (fpsRatio >= 0.95 && (rtt == 0 || rtt <= 30) && dropPct <= 0.5) {
-                    statsColor = {0x00, 0xCC, 0x00, 0xFF};  // Green - healthy
+                    statsColor = QUALITY_COLOR_GREEN;
                 } else if (fpsRatio >= 0.80 && (rtt == 0 || rtt <= 80) && dropPct <= 3.0) {
-                    statsColor = {0xD0, 0xD0, 0x00, 0xFF};  // Yellow - degraded
+                    statsColor = QUALITY_COLOR_YELLOW;
                 } else {
-                    statsColor = {0xCC, 0x00, 0x00, 0xFF};  // Red - poor
+                    statsColor = QUALITY_COLOR_RED;
                 }
 
                 Session::get()->getOverlayManager().setOverlayColor(Overlay::OverlayDebug, statsColor);
@@ -1879,22 +1884,27 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
                 if (fpsRatio < QUALITY_YELLOW_FPS_RATIO ||
                     (rtt > 0 && rtt > (uint32_t)QUALITY_YELLOW_RTT_MS) ||
                     dropPct > QUALITY_YELLOW_DROP_PCT) {
-                    badgeColor = {255, 60, 60, 255};
+                    badgeColor = QUALITY_COLOR_RED;
                     badgeText = "[XX]";
                 }
                 else if (fpsRatio < QUALITY_GREEN_FPS_RATIO ||
                          (rtt > 0 && rtt > (uint32_t)QUALITY_GREEN_RTT_MS) ||
                          dropPct > QUALITY_GREEN_DROP_PCT) {
-                    badgeColor = {255, 200, 0, 255};
+                    badgeColor = QUALITY_COLOR_YELLOW;
                     badgeText = "[!!]";
                 }
                 else {
-                    badgeColor = {0, 200, 0, 255};
+                    badgeColor = QUALITY_COLOR_GREEN;
                     badgeText = "[OK]";
                 }
 
                 Session::get()->getOverlayManager().setOverlayColor(Overlay::OverlayQualityBadge, badgeColor);
                 Session::get()->getOverlayManager().updateOverlayText(Overlay::OverlayQualityBadge, badgeText);
+            } else {
+                // No frames rendered — connection may be stalled
+                SDL_Color stallColor = {0x80, 0x80, 0x80, 0xFF};  // Gray
+                Session::get()->getOverlayManager().setOverlayColor(Overlay::OverlayQualityBadge, stallColor);
+                Session::get()->getOverlayManager().updateOverlayText(Overlay::OverlayQualityBadge, "[--]");
             }
         }
 

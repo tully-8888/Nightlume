@@ -307,7 +307,7 @@ void SdlInputHandler::updateVsrOverlayText()
     }
     
     snprintf(textBuf, overlayMgr.getOverlayMaxTextLength(),
-        "Live Settings (Ctrl+G/Q close, Tab=section)\n"
+        "Live Settings (Ctrl+G close, Tab=section)\n"
         "════════════════════════════════════════\n"
         "%s\n"
         "────────────────────────────────────────\n"
@@ -490,13 +490,6 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
             (event->keysym.mod & KMOD_CTRL) &&
             (event->keysym.mod & KMOD_ALT) &&
             (event->keysym.mod & KMOD_SHIFT)) {
-        if (m_SpecialKeyCombos[KeyComboToggleQualityView].enabled &&
-            (event->keysym.sym == m_SpecialKeyCombos[KeyComboToggleQualityView].keyCode ||
-             event->keysym.scancode == m_SpecialKeyCombos[KeyComboToggleQualityView].scanCode)) {
-            performSpecialKeyCombo(KeyComboToggleQualityView);
-            return;
-        }
-
         // First we test the SDLK combos for matches,
         // that way we ensure that latin keyboard users
         // can match to the key they see on their keyboards.
