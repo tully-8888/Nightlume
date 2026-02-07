@@ -24,6 +24,9 @@
 #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
 #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
+#define SDL_CODE_RECONNECT_NEEDED 106
+#define SDL_CODE_RECONNECT_ATTEMPT 107
+#define SDL_CODE_RECONNECT_RESULT 108
 
 #include <openssl/rand.h>
 
@@ -89,6 +92,41 @@ void Session::clConnectionTerminated(int errorCode)
 {
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
+
+    bool isRetryable = false;
+    if (s_ActiveSession->m_Preferences->enableAutoReconnect &&
+        !s_ActiveSession->m_IsReconnecting &&
+        s_ActiveSession->m_ReconnectAttempt < k_MaxReconnectAttempts) {
+        switch (errorCode) {
+        case ML_ERROR_NO_VIDEO_TRAFFIC:
+        case ML_ERROR_NO_VIDEO_FRAME:
+            isRetryable = true;
+            break;
+        case ML_ERROR_GRACEFUL_TERMINATION:
+        case ML_ERROR_PROTECTED_CONTENT:
+        case ML_ERROR_UNEXPECTED_EARLY_TERMINATION:
+        case ML_ERROR_FRAME_CONVERSION:
+            isRetryable = false;
+            break;
+        default:
+            isRetryable = true;
+            break;
+        }
+    }
+
+    if (isRetryable) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Connection terminated with retryable error %d, attempting reconnection (attempt %d/%d)",
+                    errorCode, s_ActiveSession->m_ReconnectAttempt + 1, k_MaxReconnectAttempts);
+
+        SDL_Event event;
+        event.type = SDL_USEREVENT;
+        event.user.code = SDL_CODE_RECONNECT_NEEDED;
+        event.user.data1 = nullptr;
+        event.user.data2 = nullptr;
+        SDL_PushEvent(&event);
+        return;
+    }
 
     // Display the termination dialog if this was not intended
     switch (errorCode) {
@@ -568,6 +606,10 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_AudioRenderer(nullptr),
       m_AudioSampleCount(0),
       m_DropAudioEndTime(0)
+      , m_ReconnectAttempt(0)
+      , m_LastMeasuredBandwidthMbps(0)
+      , m_ReconnectTimerId(0)
+      , m_IsReconnecting(false)
 #ifdef Q_OS_DARWIN
       , m_PowerAssertionId(0)
       , m_DisplayAssertionId(0)
@@ -1543,6 +1585,115 @@ public:
     Session* m_Session;
 };
 
+class ReconnectThread : public QThread
+{
+public:
+    ReconnectThread(Session* session) :
+        QThread(nullptr),
+        m_Session(session)
+    {
+        setObjectName("Reconnect");
+    }
+
+    void run() override
+    {
+        // Tear down the dead connection first
+        LiStopConnection();
+
+        // Attempt to re-establish the connection
+        bool success = m_Session->reconnectAsync();
+
+        // Notify the main thread via SDL event
+        SDL_Event event;
+        event.type = SDL_USEREVENT;
+        event.user.code = SDL_CODE_RECONNECT_RESULT;
+        event.user.data1 = (void*)(intptr_t)success;
+        event.user.data2 = nullptr;
+        SDL_PushEvent(&event);
+    }
+
+    Session* m_Session;
+};
+
+static Uint32 reconnectTimerCallback(Uint32, void*)
+{
+    SDL_Event event;
+    event.type = SDL_USEREVENT;
+    event.user.code = SDL_CODE_RECONNECT_ATTEMPT;
+    event.user.data1 = nullptr;
+    event.user.data2 = nullptr;
+    SDL_PushEvent(&event);
+    return 0;
+}
+
+bool Session::reconnectAsync()
+{
+    try {
+        NvHTTP http(m_Computer);
+
+        QString rtspSessionUrl;
+        http.startApp(m_Computer->currentGameId != 0 ? "resume" : "launch",
+                      m_Computer->isNvidiaServerSoftware,
+                      m_App.id, &m_StreamConfig,
+                      m_Preferences->gameOptimizations,
+                      m_Preferences->playAudioOnHost,
+                      m_InputHandler->getAttachedGamepadMask(),
+                      !m_Preferences->multiController,
+                      rtspSessionUrl);
+
+        QByteArray hostnameStr = m_Computer->activeAddress.address().toUtf8();
+        QByteArray siAppVersion = m_Computer->appVersion.toUtf8();
+
+        SERVER_INFORMATION hostInfo;
+        hostInfo.address = hostnameStr.data();
+        hostInfo.serverInfoAppVersion = siAppVersion.data();
+        hostInfo.serverCodecModeSupport = m_Computer->serverCodecModeSupport;
+
+        QByteArray siGfeVersion;
+        if (!m_Computer->gfeVersion.isEmpty()) {
+            siGfeVersion = m_Computer->gfeVersion.toUtf8();
+        }
+        if (!siGfeVersion.isEmpty()) {
+            hostInfo.serverInfoGfeVersion = siGfeVersion.data();
+        }
+
+        QByteArray rtspSessionUrlStr;
+        if (!rtspSessionUrl.isEmpty()) {
+            rtspSessionUrlStr = rtspSessionUrl.toUtf8();
+            hostInfo.rtspSessionUrl = rtspSessionUrlStr.data();
+        }
+
+        int err = LiStartConnection(&hostInfo,
+                                    &m_StreamConfig,
+                                    &k_ConnCallbacks,
+                                    &m_VideoCallbacks,
+                                    &m_AudioCallbacks,
+                                    NULL, 0, NULL, 0);
+
+        if (err != 0) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "LiStartConnection() failed during reconnect: %d", err);
+            return false;
+        }
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Reconnection successful");
+        return true;
+    }
+    catch (const GfeHttpResponseException& e) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Reconnect HTTP error: %d %s", e.getStatusCode(),
+                     e.toQString().toUtf8().constData());
+        return false;
+    }
+    catch (const QtNetworkReplyException& e) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Reconnect network error: %s",
+                     e.toQString().toUtf8().constData());
+        return false;
+    }
+}
+
 // Called in a non-main thread
 bool Session::startConnectionAsync()
 {
@@ -2083,8 +2234,163 @@ void Session::exec()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
+
+            case SDL_CODE_RECONNECT_NEEDED:
+            {
+                if (m_VideoDecoder) {
+                    m_LastMeasuredBandwidthMbps = m_VideoDecoder->getAverageBandwidthMbps();
+                }
+
+                if (m_OriginalWindowTitle.empty()) {
+                    const char* title = SDL_GetWindowTitle(m_Window);
+                    if (title) {
+                        m_OriginalWindowTitle = title;
+                    }
+                }
+
+                SDL_LockMutex(m_DecoderLock);
+                delete m_VideoDecoder;
+                m_VideoDecoder = nullptr;
+                SDL_UnlockMutex(m_DecoderLock);
+
+                m_IsReconnecting = true;
+
+                std::string reconnectTitle = "Reconnecting... (attempt "
+                    + std::to_string(m_ReconnectAttempt + 1) + "/"
+                    + std::to_string(k_MaxReconnectAttempts) + ")";
+                SDL_SetWindowTitle(m_Window, reconnectTitle.c_str());
+
+                m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate,
+                    "Reconnecting...");
+                m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+
+                Uint32 delay = 1000 * (1 << m_ReconnectAttempt);
+                m_ReconnectAttempt++;
+                m_ReconnectTimerId = SDL_AddTimer(delay, reconnectTimerCallback, nullptr);
+                break;
+            }
+
+            case SDL_CODE_RECONNECT_ATTEMPT:
+            {
+                m_ReconnectTimerId = 0;
+
+                if (m_Preferences->autoAdjustBitrate && m_LastMeasuredBandwidthMbps > 0) {
+                    int cappedBitrate = (int)(m_LastMeasuredBandwidthMbps * 0.8 * 1000);
+                    if (cappedBitrate < m_StreamConfig.bitrate) {
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Reducing bitrate from %d to %d kbps for reconnection",
+                                    m_StreamConfig.bitrate, cappedBitrate);
+                        m_StreamConfig.bitrate = cappedBitrate;
+                    }
+                }
+
+                std::string attemptTitle = "Reconnecting... (attempt "
+                    + std::to_string(m_ReconnectAttempt) + "/"
+                    + std::to_string(k_MaxReconnectAttempts) + ")";
+                SDL_SetWindowTitle(m_Window, attemptTitle.c_str());
+
+                m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate,
+                    QString("Reconnecting... (attempt %1/%2)")
+                        .arg(m_ReconnectAttempt)
+                        .arg(k_MaxReconnectAttempts).toUtf8().constData());
+                m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+
+                auto reconnectThread = new ReconnectThread(this);
+                QObject::connect(reconnectThread, &QThread::finished,
+                                 reconnectThread, &QThread::deleteLater);
+                reconnectThread->start();
+                break;
+            }
+
+            case SDL_CODE_RECONNECT_RESULT:
+            {
+                bool success = (bool)(intptr_t)event.user.data1;
+
+                if (success) {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "Reconnection succeeded after %d attempt(s)",
+                                m_ReconnectAttempt);
+
+                    m_IsReconnecting = false;
+                    m_ReconnectAttempt = 0;
+
+                    SDL_LockMutex(m_DecoderLock);
+
+                    flushWindowEvents();
+                    SDL_PumpEvents();
+                    SDL_FlushEvent(SDL_RENDER_DEVICE_RESET);
+
+                    {
+                        int displayHz = StreamUtils::getDisplayRefreshRate(m_Window);
+                        bool enableVsync = m_Preferences->enableVsync;
+                        if (displayHz + 5 < m_StreamConfig.fps) {
+                            enableVsync = false;
+                        }
+
+                        if (!chooseDecoder(m_Preferences->videoDecoderSelection,
+                                           m_Window, m_ActiveVideoFormat, m_ActiveVideoWidth,
+                                           m_ActiveVideoHeight, m_ActiveVideoFrameRate,
+                                           enableVsync,
+                                           enableVsync && m_Preferences->framePacing,
+                                           m_Preferences->videoEnhancing,
+                                           false,
+                                           s_ActiveSession->m_VideoDecoder)) {
+                            SDL_UnlockMutex(m_DecoderLock);
+                            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                                         "Failed to recreate decoder after reconnection");
+                            m_UnexpectedTermination = true;
+                            emit displayLaunchError(tr("Failed to recreate video decoder after reconnection."));
+                            goto DispatchDeferredCleanup;
+                        }
+                    }
+
+                    LiRequestIdrFrame();
+                    m_VideoDecoder->setHdrMode(LiGetCurrentHostDisplayHdrMode());
+                    m_InputHandler->updatePointerRegionLock();
+
+                    SDL_UnlockMutex(m_DecoderLock);
+
+                    if (!m_OriginalWindowTitle.empty()) {
+                        SDL_SetWindowTitle(m_Window, m_OriginalWindowTitle.c_str());
+                        m_OriginalWindowTitle.clear();
+                    }
+
+                    m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
+                }
+                else {
+                    if (m_ReconnectAttempt < k_MaxReconnectAttempts) {
+                        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Reconnection attempt %d failed, retrying...",
+                                    m_ReconnectAttempt);
+
+                        SDL_Event retryEvent;
+                        retryEvent.type = SDL_USEREVENT;
+                        retryEvent.user.code = SDL_CODE_RECONNECT_NEEDED;
+                        retryEvent.user.data1 = nullptr;
+                        retryEvent.user.data2 = nullptr;
+                        SDL_PushEvent(&retryEvent);
+                    }
+                    else {
+                        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                                     "All %d reconnection attempts exhausted",
+                                     k_MaxReconnectAttempts);
+
+                        m_IsReconnecting = false;
+                        m_UnexpectedTermination = true;
+                        emit displayLaunchError(tr("Unable to reconnect to the host after %1 attempts.")
+                                                    .arg(k_MaxReconnectAttempts));
+
+                        SDL_Event quitEvent;
+                        quitEvent.type = SDL_QUIT;
+                        quitEvent.quit.timestamp = SDL_GetTicks();
+                        SDL_PushEvent(&quitEvent);
+                    }
+                }
+                break;
+            }
+
             default:
-                SDL_assert(false);
+                break;
             }
             break;
 
@@ -2360,6 +2666,12 @@ void Session::exec()
 DispatchDeferredCleanup:
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
+
+    if (m_ReconnectTimerId) {
+        SDL_RemoveTimer(m_ReconnectTimerId);
+        m_ReconnectTimerId = 0;
+    }
+    m_IsReconnecting = false;
 
     // Uncapture the mouse and hide the window immediately,
     // so we can return to the Qt GUI ASAP.

@@ -32,6 +32,7 @@ public:
     virtual bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info) override;
 
     virtual IFFmpegRenderer* getBackendRenderer();
+    virtual double getAverageBandwidthMbps() override;
 
     const VIDEO_STATS& getGlobalVideoStats() const;
 

@@ -2105,6 +2105,23 @@ Flickable {
                 }
 
                 CheckBox {
+                    id: autoReconnectCheck
+                    width: parent.width
+                    hoverEnabled: true
+                    text: qsTr("Auto-reconnect on connection loss")
+                    font.pointSize: 12
+                    checked: StreamingPreferences.enableAutoReconnect
+                    onCheckedChanged: {
+                        StreamingPreferences.enableAutoReconnect = checked
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Automatically attempts to reconnect when the stream is interrupted. If adaptive bitrate is enabled, the bitrate will be reduced on reconnection based on measured bandwidth.")
+                }
+
+                CheckBox {
                     id: showPerformanceOverlay
                     width: parent.width
                     text: qsTr("Show performance stats while streaming")

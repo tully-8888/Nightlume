@@ -96,6 +96,7 @@ class Session : public QObject
     friend class SdlInputHandler;
     friend class DeferredSessionCleanupTask;
     friend class AsyncConnectionStartThread;
+    friend class ReconnectThread;
 
 public:
     explicit Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences = nullptr);
@@ -125,6 +126,13 @@ public:
     {
         return m_Preferences;
     }
+
+    int getConfiguredBitrateKbps() const
+    {
+        return m_StreamConfig.bitrate;
+    }
+
+    static constexpr int k_MaxReconnectAttempts = 5;
 
     void flushWindowEvents();
 
@@ -158,6 +166,8 @@ private:
     void emitLaunchWarning(QString text);
 
     bool populateDecoderProperties(SDL_Window* window);
+
+    bool reconnectAsync();
 
     IAudioRenderer* createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATION opusConfig);
 
@@ -285,6 +295,12 @@ private:
     Uint32 m_DropAudioEndTime;
 
     Overlay::OverlayManager m_OverlayManager;
+
+    int m_ReconnectAttempt;
+    double m_LastMeasuredBandwidthMbps;
+    SDL_TimerID m_ReconnectTimerId;
+    std::string m_OriginalWindowTitle;
+    bool m_IsReconnecting;
 
 #ifdef Q_OS_DARWIN
     uint32_t m_PowerAssertionId;

@@ -274,6 +274,11 @@ IFFmpegRenderer* FFmpegVideoDecoder::getBackendRenderer()
     return m_BackendRenderer;
 }
 
+double FFmpegVideoDecoder::getAverageBandwidthMbps()
+{
+    return m_BwTracker.GetAverageMbps();
+}
+
 void FFmpegVideoDecoder::reset()
 {
     // Terminate the decoder thread before doing anything else.
@@ -786,28 +791,22 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
 
     if (stats.receivedFps > 0) {
         if (m_VideoDecoderCtx != nullptr) {
-#ifdef DISPLAY_BITRATE
             double avgVideoMbps = m_BwTracker.GetAverageMbps();
             double peakVideoMbps = m_BwTracker.GetPeakMbps();
-#endif
 
             ret = snprintf(&output[offset],
                            length - offset,
                            "Video stream: %dx%d %.2f FPS (Codec: %s)\n"
-#ifdef DISPLAY_BITRATE
                            "Bitrate: %.1f Mbps, Peak (%us): %.1f\n"
-#endif
                            ,
                            m_VideoDecoderCtx->width,
                            m_VideoDecoderCtx->height,
                            stats.totalFps,
                            codecString
-#ifdef DISPLAY_BITRATE
                            ,
                            avgVideoMbps,
                            m_BwTracker.GetWindowSeconds(),
                            peakVideoMbps
-#endif
                            );
             if (ret < 0 || ret >= length - offset) {
                 SDL_assert(false);
@@ -1836,6 +1835,21 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
         // Accumulate these values into the global stats
         addVideoStats(m_ActiveWndVideoStats, m_GlobalVideoStats);
+
+        if (Session::get()->getPreferences()->connectionWarnings) {
+            double avgBandwidthMbps = m_BwTracker.GetAverageMbps();
+            double configuredBitrateMbps = Session::get()->getConfiguredBitrateKbps() / 1000.0;
+
+            if (avgBandwidthMbps > 0 && configuredBitrateMbps > 0 &&
+                avgBandwidthMbps < configuredBitrateMbps * 0.8) {
+                char warningText[256];
+                snprintf(warningText, sizeof(warningText),
+                         "Low bandwidth: %.1f / %.0f Mbps\nConsider reducing bitrate",
+                         avgBandwidthMbps, configuredBitrateMbps);
+                Session::get()->getOverlayManager().updateOverlayText(Overlay::OverlayStatusUpdate, warningText);
+                Session::get()->getOverlayManager().setOverlayState(Overlay::OverlayStatusUpdate, true);
+            }
+        }
 
         // Move this window into the last window slot and clear it for next window
         SDL_memcpy(&m_LastWndVideoStats, &m_ActiveWndVideoStats, sizeof(m_ActiveWndVideoStats));

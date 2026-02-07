@@ -89,4 +89,5 @@ public:
     virtual void renderFrameOnMainThread() = 0;
     virtual void setHdrMode(bool enabled) = 0;
     virtual bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info) = 0;
+    virtual double getAverageBandwidthMbps() { return 0.0; }
 };

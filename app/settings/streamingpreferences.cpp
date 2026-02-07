@@ -64,6 +64,7 @@
 #define SER_USEDISPLAYLINK "usedisplaylink"
 #define SER_TRIPLEBUFFERING "triplebuffering"
 #define SER_SUPPRESSAWDL "suppressawdl"
+#define SER_AUTORECONNECT "autoreconnect"
 
 #define CURRENT_DEFAULT_VER 2
 
@@ -202,6 +203,7 @@ void StreamingPreferences::reload()
     useDisplayLink = settings.value(SER_USEDISPLAYLINK, false).toBool();
     tripleBuffering = settings.value(SER_TRIPLEBUFFERING, false).toBool();
     suppressAWDL = settings.value(SER_SUPPRESSAWDL, true).toBool();
+    enableAutoReconnect = settings.value(SER_AUTORECONNECT, true).toBool();
 
 
     // Perform default settings updates as required based on last default version
@@ -405,6 +407,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_USEDISPLAYLINK, useDisplayLink);
     settings.setValue(SER_TRIPLEBUFFERING, tripleBuffering);
     settings.setValue(SER_SUPPRESSAWDL, suppressAWDL);
+    settings.setValue(SER_AUTORECONNECT, enableAutoReconnect);
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)
@@ -419,12 +422,12 @@ int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool
         int pixels;
         int factor;
     } resTable[] {
-        { 640 * 360, 1 },
-        { 854 * 480, 2 },
-        { 1280 * 720, 5 },
-        { 1920 * 1080, 10 },
-        { 2560 * 1440, 20 },
-        { 3840 * 2160, 40 },
+        { 640 * 360, 2 },
+        { 854 * 480, 3 },
+        { 1280 * 720, 7 },
+        { 1920 * 1080, 15 },
+        { 2560 * 1440, 30 },
+        { 3840 * 2160, 60 },
         { -1, -1 },
     };
 
