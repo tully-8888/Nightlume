@@ -7,6 +7,7 @@ OverlayManager::OverlayManager() :
     m_Renderer(nullptr),
     m_FontData(Path::readDataFile("ModeSeven.ttf"))
 {
+    m_Lock = SDL_CreateMutex();
     memset(m_Overlays, 0, sizeof(m_Overlays));
 
     m_Overlays[OverlayType::OverlayDebug].color = {0xD0, 0xD0, 0x00, 0xFF};
@@ -17,6 +18,9 @@ OverlayManager::OverlayManager() :
 
     m_Overlays[OverlayType::OverlayVsrSettings].color = {0x00, 0xCC, 0xCC, 0xFF};
     m_Overlays[OverlayType::OverlayVsrSettings].fontSize = 18;
+
+    m_Overlays[OverlayType::OverlayQualityBadge].color = {0x00, 0xCC, 0x00, 0xFF};
+    m_Overlays[OverlayType::OverlayQualityBadge].fontSize = 14;
 
     // While TTF will usually not be initialized here, it is valid for that not to
     // be the case, since Session destruction is deferred and could overlap with
@@ -33,6 +37,8 @@ OverlayManager::OverlayManager() :
 
 OverlayManager::~OverlayManager()
 {
+    SDL_DestroyMutex(m_Lock);
+
     for (int i = 0; i < OverlayType::OverlayMax; i++) {
         if (m_Overlays[i].surface != nullptr) {
             SDL_FreeSurface(m_Overlays[i].surface);
@@ -63,10 +69,15 @@ char* OverlayManager::getOverlayText(OverlayType type)
 
 void OverlayManager::updateOverlayText(OverlayType type, const char* text)
 {
+    SDL_LockMutex(m_Lock);
     strncpy(m_Overlays[type].text, text, sizeof(m_Overlays[0].text));
     m_Overlays[type].text[getOverlayMaxTextLength() - 1] = '\0';
 
-    setOverlayTextUpdated(type);
+    // Inline setOverlayTextUpdated() logic to avoid recursive locking.
+    if (m_Overlays[type].enabled) {
+        notifyOverlayUpdated(type);
+    }
+    SDL_UnlockMutex(m_Lock);
 }
 
 int OverlayManager::getOverlayMaxTextLength()
@@ -81,22 +92,28 @@ int OverlayManager::getOverlayFontSize(OverlayType type)
 
 SDL_Surface* OverlayManager::getUpdatedOverlaySurface(OverlayType type)
 {
+    SDL_LockMutex(m_Lock);
     // If a new surface is available, return it. If not, return nullptr.
     // Caller must free the surface on success.
-    return (SDL_Surface*)SDL_AtomicSetPtr((void**)&m_Overlays[type].surface, nullptr);
+    SDL_Surface* result = (SDL_Surface*)SDL_AtomicSetPtr((void**)&m_Overlays[type].surface, nullptr);
+    SDL_UnlockMutex(m_Lock);
+    return result;
 }
 
 void OverlayManager::setOverlayTextUpdated(OverlayType type)
 {
+    SDL_LockMutex(m_Lock);
     // Only update the overlay state if it's enabled. If it's not enabled,
     // the renderer has already been notified by setOverlayState().
     if (m_Overlays[type].enabled) {
         notifyOverlayUpdated(type);
     }
+    SDL_UnlockMutex(m_Lock);
 }
 
 void OverlayManager::setOverlayState(OverlayType type, bool enabled)
 {
+    SDL_LockMutex(m_Lock);
     bool stateChanged = m_Overlays[type].enabled != enabled;
 
     m_Overlays[type].enabled = enabled;
@@ -109,11 +126,19 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
 
         notifyOverlayUpdated(type);
     }
+    SDL_UnlockMutex(m_Lock);
 }
 
 SDL_Color OverlayManager::getOverlayColor(OverlayType type)
 {
     return m_Overlays[type].color;
+}
+
+void OverlayManager::setOverlayColor(OverlayType type, SDL_Color color)
+{
+    SDL_LockMutex(m_Lock);
+    m_Overlays[type].color = color;
+    SDL_UnlockMutex(m_Lock);
 }
 
 void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)

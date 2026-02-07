@@ -168,6 +168,7 @@ private:
         KeyComboTogglePointerRegionLock,
         KeyComboQuitAndExit,
         KeyComboToggleVsrOverlay,
+        KeyComboToggleQualityView,
         KeyComboMax
     };
 

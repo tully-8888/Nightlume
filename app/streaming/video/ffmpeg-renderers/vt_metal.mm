@@ -747,6 +747,11 @@ public:
                     renderRect.x = 0;
                     renderRect.y = m_LastDrawableHeight - overlayTexture.height;
                 }
+                else if (i == Overlay::OverlayQualityBadge) {
+                    // Top-right corner with 10px margin
+                    renderRect.x = m_LastDrawableWidth - overlayTexture.width - 10;
+                    renderRect.y = m_LastDrawableHeight - overlayTexture.height - 10;
+                }
 
                 renderRect.w = overlayTexture.width;
                 renderRect.h = overlayTexture.height;
@@ -1134,8 +1139,24 @@ public:
 
         m_Window = params->window;
         m_DecoderParams = *params;
-        // Always prefer 120Hz on ProMotion displays for maximum smoothness
-        m_FrameRateRange = CAFrameRateRangeMake(params->frameRate, 120, 120);
+        
+        // Detect max display refresh rate for ProMotion/VRR support
+        NSInteger maxDisplayRefresh = 60;
+        if (@available(macOS 12.0, *)) {
+            maxDisplayRefresh = [NSScreen mainScreen].maximumFramesPerSecond;
+            if (maxDisplayRefresh <= 0) {
+                maxDisplayRefresh = 60;
+            }
+        }
+        
+        // Set VRR-aware frame rate range
+        // preferred=streamFPS tells macOS to match stream cadence
+        // maximum=maxDisplayRefresh enables VRR on ProMotion displays
+        int clampedFps = MIN((int)maxDisplayRefresh, params->frameRate);
+        m_FrameRateRange = CAFrameRateRangeMake(clampedFps, maxDisplayRefresh, clampedFps);
+        
+        ML_LOG_METAL("VRR frame pacing: stream=%dFPS, display=%ldHz, preferred=%dFPS",
+            params->frameRate, (long)maxDisplayRefresh, clampedFps);
 
         id<MTLDevice> device = getMetalDevice();
         if (!device) {

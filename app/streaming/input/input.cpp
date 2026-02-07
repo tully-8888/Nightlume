@@ -123,6 +123,11 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     m_SpecialKeyCombos[KeyComboToggleVsrOverlay].scanCode = SDL_SCANCODE_G;
     m_SpecialKeyCombos[KeyComboToggleVsrOverlay].enabled = true;
 
+    m_SpecialKeyCombos[KeyComboToggleQualityView].keyCombo = KeyComboToggleQualityView;
+    m_SpecialKeyCombos[KeyComboToggleQualityView].keyCode = SDLK_i;
+    m_SpecialKeyCombos[KeyComboToggleQualityView].scanCode = SDL_SCANCODE_I;
+    m_SpecialKeyCombos[KeyComboToggleQualityView].enabled = true;
+
     m_OldIgnoreDevices = SDL_GetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES);
     m_OldIgnoreDevicesExcept = SDL_GetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT);
 

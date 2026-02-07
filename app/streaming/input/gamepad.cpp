@@ -395,6 +395,29 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         return;
     }
 
+    // Handle Select+L1+R1+Y as a quality view toggle combo
+    if (state->buttons == (BACK_FLAG | LB_FLAG | RB_FLAG | Y_FLAG)) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Detected quality view toggle gamepad combo");
+
+        Overlay::OverlayManager& overlayMgr = Session::get()->getOverlayManager();
+        bool wasEnabled = overlayMgr.isOverlayEnabled(Overlay::OverlayVsrSettings);
+
+        if (wasEnabled) {
+            Session::get()->m_Preferences->save();
+            overlayMgr.setOverlayState(Overlay::OverlayVsrSettings, false);
+        } else {
+            m_VsrOverlaySelectedSection = 4;
+            m_VsrOverlaySelectedRow = 0;
+            updateVsrOverlayText();
+            overlayMgr.setOverlayState(Overlay::OverlayVsrSettings, true);
+        }
+
+        LiSendMultiControllerEvent(state->index, m_GamepadMask,
+                                   0, 0, 0, 0, 0, 0, 0);
+        return;
+    }
+
     // Only send the gamepad state to the host if it's not in mouse emulation mode
     if (state->mouseEmulationTimer == 0) {
         sendGamepadState(state);
