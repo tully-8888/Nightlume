@@ -173,6 +173,25 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         SDL_PushEvent(&quitExitEvent);
         break;
 
+    case KeyComboToggleQualityView:
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Detected quality view toggle combo");
+        {
+            Overlay::OverlayManager& overlayMgr = Session::get()->getOverlayManager();
+            bool wasEnabled = overlayMgr.isOverlayEnabled(Overlay::OverlayVsrSettings);
+
+            if (wasEnabled) {
+                Session::get()->m_Preferences->save();
+                overlayMgr.setOverlayState(Overlay::OverlayVsrSettings, false);
+            } else {
+                m_VsrOverlaySelectedSection = 4;
+                m_VsrOverlaySelectedRow = 0;
+                updateVsrOverlayText();
+                overlayMgr.setOverlayState(Overlay::OverlayVsrSettings, true);
+            }
+        }
+        break;
+
     default:
         Q_UNREACHABLE();
     }

@@ -1793,6 +1793,14 @@ void FFmpegVideoDecoder::decoderThreadProc()
     }
 }
 
+// Quality threshold constants for badge updates
+static constexpr float QUALITY_GREEN_FPS_RATIO = 0.95f;    // >= 95% of target
+static constexpr float QUALITY_YELLOW_FPS_RATIO = 0.80f;   // >= 80% of target
+static constexpr int QUALITY_GREEN_RTT_MS = 30;
+static constexpr int QUALITY_YELLOW_RTT_MS = 80;
+static constexpr float QUALITY_GREEN_DROP_PCT = 0.5f;
+static constexpr float QUALITY_YELLOW_DROP_PCT = 3.0f;
+
 int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 {
     PLENTRY entry = du->bufferList;
@@ -1827,10 +1835,67 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
             addVideoStats(m_LastWndVideoStats, lastTwoWndStats);
             addVideoStats(m_ActiveWndVideoStats, lastTwoWndStats);
 
+            // Dynamic color-coding based on worst-metric connection quality
+            {
+                double fpsRatio = (m_StreamFps > 0) ? (lastTwoWndStats.receivedFps / m_StreamFps) : 1.0;
+                uint32_t rtt = lastTwoWndStats.lastRtt; // 0 means N/A
+                double dropPct = (lastTwoWndStats.totalFrames > 0)
+                    ? ((double)lastTwoWndStats.networkDroppedFrames / lastTwoWndStats.totalFrames * 100.0)
+                    : 0.0;
+
+                SDL_Color statsColor;
+                if (fpsRatio >= 0.95 && (rtt == 0 || rtt <= 30) && dropPct <= 0.5) {
+                    statsColor = {0x00, 0xCC, 0x00, 0xFF};  // Green - healthy
+                } else if (fpsRatio >= 0.80 && (rtt == 0 || rtt <= 80) && dropPct <= 3.0) {
+                    statsColor = {0xD0, 0xD0, 0x00, 0xFF};  // Yellow - degraded
+                } else {
+                    statsColor = {0xCC, 0x00, 0x00, 0xFF};  // Red - poor
+                }
+
+                Session::get()->getOverlayManager().setOverlayColor(Overlay::OverlayDebug, statsColor);
+            }
+
             stringifyVideoStats(lastTwoWndStats,
                                 Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug),
                                 Session::get()->getOverlayManager().getOverlayMaxTextLength());
             Session::get()->getOverlayManager().setOverlayTextUpdated(Overlay::OverlayDebug);
+        }
+
+        // Update quality badge with connection health
+        {
+            VIDEO_STATS qualityStats = {};
+            addVideoStats(m_LastWndVideoStats, qualityStats);
+            addVideoStats(m_ActiveWndVideoStats, qualityStats);
+
+            if (qualityStats.renderedFrames > 0) {
+                float fpsRatio = (m_StreamFps > 0) ? (float)(qualityStats.renderedFps / m_StreamFps) : 1.0f;
+                float dropPct = (qualityStats.totalFrames > 0) ?
+                    (float)qualityStats.networkDroppedFrames / qualityStats.totalFrames * 100.0f : 0.0f;
+                uint32_t rtt = qualityStats.lastRtt;
+
+                SDL_Color badgeColor;
+                const char* badgeText;
+
+                if (fpsRatio < QUALITY_YELLOW_FPS_RATIO ||
+                    (rtt > 0 && rtt > (uint32_t)QUALITY_YELLOW_RTT_MS) ||
+                    dropPct > QUALITY_YELLOW_DROP_PCT) {
+                    badgeColor = {255, 60, 60, 255};
+                    badgeText = "[XX]";
+                }
+                else if (fpsRatio < QUALITY_GREEN_FPS_RATIO ||
+                         (rtt > 0 && rtt > (uint32_t)QUALITY_GREEN_RTT_MS) ||
+                         dropPct > QUALITY_GREEN_DROP_PCT) {
+                    badgeColor = {255, 200, 0, 255};
+                    badgeText = "[!!]";
+                }
+                else {
+                    badgeColor = {0, 200, 0, 255};
+                    badgeText = "[OK]";
+                }
+
+                Session::get()->getOverlayManager().setOverlayColor(Overlay::OverlayQualityBadge, badgeColor);
+                Session::get()->getOverlayManager().updateOverlayText(Overlay::OverlayQualityBadge, badgeText);
+            }
         }
 
         // Accumulate these values into the global stats
